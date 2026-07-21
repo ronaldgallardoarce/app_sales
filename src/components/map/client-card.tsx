@@ -1,14 +1,25 @@
+import { LinearGradient } from 'expo-linear-gradient';
+import type { ReactNode } from 'react';
 import { Linking, Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
-import { Icon } from '@/components/ui/icon';
-import { CardShadow, Radius, Spacing } from '@/constants/theme';
+import { Icon, type IconName } from '@/components/ui/icon';
+import { CardShadow, ChipPadding, Radius, Spacing } from '@/constants/theme';
 import { STATUS_META, type MapClient } from '@/data/mock-clients';
 import { mockSeller } from '@/data/mock-user';
 import { useTheme } from '@/hooks/use-theme';
 import { distanceKm, formatDistance } from '@/utils/geo';
 
 const WHATSAPP_GREEN = '#25D366';
+
+/** Adds an alpha channel to a `#rrggbb` color so it can fade into a gradient. */
+function withAlpha(hex: string, alpha: number): string {
+  const value = parseInt(hex.replace('#', ''), 16);
+  const r = (value >> 16) & 255;
+  const g = (value >> 8) & 255;
+  const b = value & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
 export function ClientCard({
   client,
@@ -29,17 +40,22 @@ export function ClientCard({
   return (
     <Pressable
       onPress={() => onPress(client)}
-      style={[
-        styles.card,
-        { backgroundColor: theme.backgroundElement, borderLeftColor: statusColor },
-        CardShadow,
-      ]}>
+      style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }, CardShadow]}>
+      <LinearGradient
+        pointerEvents="none"
+        colors={[withAlpha(statusColor, 0.16), withAlpha(statusColor, 0.04), withAlpha(statusColor, 0)]}
+        locations={[0, 0.45, 0.8]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFillObject}
+      />
+
       <View style={styles.body}>
         <View style={styles.headerRow}>
-          <ThemedText type="smallBold" style={styles.title} numberOfLines={2}>
-            {client.name} · {client.code}
+          <ThemedText type="smallBold" style={styles.title} numberOfLines={1}>
+            {client.code} · {client.name}
           </ThemedText>
-          <View style={[styles.statusBadge, { backgroundColor: theme[status.soft] }]}>
+          <View style={[styles.statusBadge, { backgroundColor: theme[status.soft], borderColor: statusColor }]}>
             <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
             <ThemedText type="smallBold" style={[styles.statusText, { color: statusColor }]}>
               {status.label}
@@ -47,27 +63,21 @@ export function ClientCard({
           </View>
         </View>
 
-        <View style={styles.metaRow}>
-          <Icon name="person.fill" size={13} color={theme.textSecondary} />
-          <ThemedText type="small" themeColor="textSecondary" numberOfLines={1} style={styles.metaText}>
-            {client.owner}
-          </ThemedText>
-        </View>
+        <MetaRow icon="person.fill" label="Propietario" value={client.owner} />
 
-        <View style={styles.chipsRow}>
-          <View style={[styles.chip, { backgroundColor: theme.backgroundSelected }]}>
-            <Icon name="map" size={12} color={theme.textSecondary} />
-            <ThemedText type="small" themeColor="textSecondary" style={styles.chipText}>
-              {client.route}
-            </ThemedText>
-          </View>
-          <View style={[styles.chip, { backgroundColor: theme.accentSoft }]}>
-            <Icon name="mappin" size={12} color={theme.accent} />
-            <ThemedText type="smallBold" style={[styles.chipText, { color: theme.accent }]}>
-              {distance}
-            </ThemedText>
-          </View>
-        </View>
+        <MetaRow
+          icon="map"
+          label="Ruta"
+          value={client.route}
+          trailing={
+            <View style={[styles.distanceChip, { backgroundColor: theme.accentSoft }]}>
+              <Icon name="mappin" size={12} color={theme.accent} />
+              <ThemedText type="smallBold" numberOfLines={1} style={[styles.chipText, { color: theme.accent }]}>
+                {distance}
+              </ThemedText>
+            </View>
+          }
+        />
 
         <View style={styles.footerRow}>
           <View style={styles.phoneRow}>
@@ -91,10 +101,36 @@ export function ClientCard({
   );
 }
 
+function MetaRow({
+  icon,
+  label,
+  value,
+  trailing,
+}: {
+  icon: IconName;
+  label: string;
+  value: string;
+  trailing?: ReactNode;
+}) {
+  const theme = useTheme();
+  return (
+    <View style={styles.metaRow}>
+      <Icon name={icon} size={13} color={theme.textSecondary} />
+      <ThemedText type="small" themeColor="textSecondary" numberOfLines={1} style={styles.metaLabel}>
+        {label}
+      </ThemedText>
+      <ThemedText type="small" numberOfLines={1} style={styles.metaValue}>
+        {value}
+      </ThemedText>
+      {trailing}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   card: {
     borderRadius: Radius.lg,
-    borderLeftWidth: 4,
+    borderWidth: 1,
     overflow: 'hidden',
   },
   body: {
@@ -103,47 +139,49 @@ const styles = StyleSheet.create({
   },
   headerRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: Spacing.two,
   },
   title: {
     flex: 1,
-    fontSize: 15,
+    fontSize: 13,
   },
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: Spacing.two,
-    paddingVertical: 4,
+    gap: 4,
+    flexShrink: 0,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
     borderRadius: Radius.pill,
+    borderWidth: 1,
   },
   statusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
   },
   statusText: {
-    fontSize: 11,
+    fontSize: 10,
   },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
   },
-  metaText: {
+  metaLabel: {
+    flexShrink: 0,
+  },
+  metaValue: {
     flex: 1,
   },
-  chipsRow: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-  },
-  chip: {
+  distanceChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
+    flexShrink: 0,
     paddingHorizontal: Spacing.two,
-    paddingVertical: 5,
+    paddingVertical: ChipPadding.vertical,
     borderRadius: Radius.sm,
   },
   chipText: {

@@ -138,7 +138,7 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: Spacing.three,
-    paddingTop: Spacing.three,
+    paddingTop: Spacing.two,
     gap: Spacing.three,
   },
   offlineCard: {

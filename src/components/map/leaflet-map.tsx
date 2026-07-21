@@ -4,8 +4,8 @@ import { WebView } from 'react-native-webview';
 
 import type { BlockPolygon, MapClient, VisitStatus } from '@/data/mock-clients';
 
-/** Fallback center (La Paz, Bolivia) used when there are no markers to fit. */
-const DEFAULT_CENTER = { lat: -16.4957, lng: -68.1335 };
+/** Fallback center (Santa Cruz de la Sierra, Bolivia) used when there are no markers to fit. */
+const DEFAULT_CENTER = { lat: -17.7678, lng: -63.1771 };
 
 type LatLng = { lat: number; lng: number };
 
@@ -14,7 +14,6 @@ type MapColors = {
   block: string;
   bounds: string;
   user: string;
-  route: string;
 };
 
 function buildHtml(
@@ -25,7 +24,6 @@ function buildHtml(
   showBounds: boolean,
   userLocation: LatLng,
   order: Record<string, number>,
-  routePath: BlockPolygon,
   colors: MapColors,
 ): string {
   const markers = clients.map((c) => ({ id: c.id, lat: c.lat, lng: c.lng, status: c.status }));
@@ -50,14 +48,12 @@ function buildHtml(
     var CLIENTS = ${JSON.stringify(markers)};
     var POLYGONS = ${JSON.stringify(polygons)};
     var BOUNDS_POLY = ${JSON.stringify(boundsPolygon)};
-    var ROUTE_PATH = ${JSON.stringify(routePath)};
     var ORDER = ${JSON.stringify(order)};
     var SHOW_BLOCKS = ${showBlocks ? 'true' : 'false'};
     var SHOW_BOUNDS = ${showBounds ? 'true' : 'false'};
     var STATUS_COLORS = ${JSON.stringify(colors.statusColors)};
     var BLOCK_COLOR = ${JSON.stringify(colors.block)};
     var BOUNDS_COLOR = ${JSON.stringify(colors.bounds)};
-    var ROUTE_COLOR = ${JSON.stringify(colors.route)};
     var USER_COLOR = ${JSON.stringify(colors.user)};
     var USER = ${JSON.stringify(userLocation)};
     var DEFAULT = ${JSON.stringify(DEFAULT_CENTER)};
@@ -86,11 +82,6 @@ function buildHtml(
         fillOpacity: 0.15
       }).addTo(map);
       BOUNDS_POLY.forEach(function (corner) { bounds.push(corner); });
-    }
-
-    if (ROUTE_PATH.length > 1) {
-      L.polyline(ROUTE_PATH, { color: ROUTE_COLOR, weight: 3, opacity: 0.8 }).addTo(map);
-      ROUTE_PATH.forEach(function (corner) { bounds.push(corner); });
     }
 
     function pinIcon(color, label) {
@@ -169,7 +160,6 @@ export function LeafletMap({
   showBounds,
   userLocation,
   order,
-  routePath,
   colors,
   onSelect,
 }: {
@@ -180,7 +170,6 @@ export function LeafletMap({
   showBounds: boolean;
   userLocation: LatLng;
   order: Record<string, number>;
-  routePath: BlockPolygon;
   colors: MapColors;
   onSelect: (id: string) => void;
 }) {
@@ -194,10 +183,9 @@ export function LeafletMap({
         showBounds,
         userLocation,
         order,
-        routePath,
         colors,
       ),
-    [clients, polygons, showBlocks, boundsPolygon, showBounds, userLocation, order, routePath, colors],
+    [clients, polygons, showBlocks, boundsPolygon, showBounds, userLocation, order, colors],
   );
 
   return (

@@ -68,7 +68,7 @@ const styles = StyleSheet.create({
     gap: 4,
     borderRadius: Radius.sm,
     borderWidth: 1.5,
-    paddingVertical: 7,
+    paddingVertical: 6,
     paddingHorizontal: 8,
   },
   badge: {

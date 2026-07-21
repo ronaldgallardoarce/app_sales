@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { Icon, type IconName } from '@/components/ui/icon';
-import { Radius, Spacing } from '@/constants/theme';
+import { ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 type ColorToken = 'accent' | 'success' | 'accentAlt' | 'violet';
@@ -132,7 +132,7 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     marginTop: Spacing.two,
-    height: 48,
+    height: ControlHeight.input,
     alignSelf: 'stretch',
     borderRadius: Radius.md,
     alignItems: 'center',

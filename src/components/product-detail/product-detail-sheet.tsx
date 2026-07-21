@@ -6,7 +6,7 @@ import { VariantChip } from '@/components/product-detail/variant-chip';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { Icon } from '@/components/ui/icon';
-import { Fonts, Radius, Spacing } from '@/constants/theme';
+import { ChipPadding, Fonts, Radius, Spacing } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
 import { useTheme } from '@/hooks/use-theme';
 import { CartLine, Product } from '@/types/catalog';
@@ -395,7 +395,7 @@ const styles = StyleSheet.create({
   },
   equivalencePill: {
     paddingHorizontal: Spacing.two,
-    paddingVertical: 6,
+    paddingVertical: ChipPadding.vertical,
     borderRadius: Radius.pill,
   },
   equivalencePillText: {

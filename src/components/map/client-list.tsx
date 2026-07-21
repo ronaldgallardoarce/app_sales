@@ -3,16 +3,27 @@ import { useMemo, useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ChannelSheet } from '@/components/map/channel-sheet';
 import { ClientCard } from '@/components/map/client-card';
 import { ClientInfoSheet } from '@/components/map/client-info-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
-import { Radius, Spacing } from '@/constants/theme';
-import { mapClients, STATUS_META, STATUS_ORDER, type MapClient, type VisitStatus } from '@/data/mock-clients';
+import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
+import {
+  CHANNEL_META,
+  CHANNEL_ORDER,
+  mapClients,
+  STATUS_META,
+  STATUS_ORDER,
+  type MapClient,
+  type SalesChannel,
+  type VisitStatus,
+} from '@/data/mock-clients';
 import { useTheme } from '@/hooks/use-theme';
 
 type Filter = 'today' | 'all';
 type StatusFilter = VisitStatus | 'all';
+type ChannelFilter = SalesChannel | 'all';
 
 export function ClientList() {
   const theme = useTheme();
@@ -23,6 +34,8 @@ export function ClientList() {
 
   const [filter, setFilter] = useState<Filter>('today');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [channelFilter, setChannelFilter] = useState<ChannelFilter>('all');
+  const [channelSheetVisible, setChannelSheetVisible] = useState(false);
   const [query, setQuery] = useState('');
   const [selectedClient, setSelectedClient] = useState<MapClient | null>(null);
 
@@ -30,10 +43,18 @@ export function ClientList() {
   const baseClients =
     filter === 'today' ? (todayClients.length > 0 ? todayClients : mapClients) : mapClients;
 
+  const channelCounts = useMemo(() => {
+    const counts = {} as Record<SalesChannel, number>;
+    CHANNEL_ORDER.forEach((channel) => (counts[channel] = 0));
+    baseClients.forEach((c) => (counts[c.channel] += 1));
+    return counts;
+  }, [baseClients]);
+
   const listClients = useMemo(() => {
     const q = query.trim().toLowerCase();
     return baseClients
       .filter((c) => statusFilter === 'all' || c.status === statusFilter)
+      .filter((c) => channelFilter === 'all' || c.channel === channelFilter)
       .filter((c) => {
         if (!q) return true;
         return (
@@ -42,18 +63,43 @@ export function ClientList() {
           c.owner.toLowerCase().includes(q)
         );
       });
-  }, [baseClients, statusFilter, query]);
+  }, [baseClients, statusFilter, channelFilter, query]);
 
   return (
     <View style={styles.root}>
       <View style={styles.controls}>
-        <View style={[styles.segment, { backgroundColor: theme.backgroundElement }]}>
-          <SegmentButton
-            label="Por visitar hoy"
-            active={filter === 'today'}
-            onPress={() => setFilter('today')}
-          />
-          <SegmentButton label="Todos" active={filter === 'all'} onPress={() => setFilter('all')} />
+        <View style={styles.topRow}>
+          <View style={[styles.segment, { backgroundColor: theme.backgroundElement }]}>
+            <SegmentButton
+              label="Por visitar hoy"
+              active={filter === 'today'}
+              onPress={() => setFilter('today')}
+            />
+            <SegmentButton label="Todos" active={filter === 'all'} onPress={() => setFilter('all')} />
+          </View>
+
+          <Pressable
+            onPress={() => setChannelSheetVisible(true)}
+            style={[
+              styles.channelButton,
+              { backgroundColor: channelFilter === 'all' ? theme.backgroundElement : theme.accent },
+            ]}>
+            <Icon name="tag.fill" size={12} color={channelFilter === 'all' ? theme.textSecondary : theme.onAccent} />
+            <ThemedText
+              type="smallBold"
+              numberOfLines={1}
+              style={[
+                styles.channelButtonLabel,
+                { color: channelFilter === 'all' ? theme.textSecondary : theme.onAccent },
+              ]}>
+              {channelFilter === 'all' ? 'Canal' : CHANNEL_META[channelFilter].label}
+            </ThemedText>
+            <Icon
+              name="chevron.down"
+              size={10}
+              color={channelFilter === 'all' ? theme.textSecondary : theme.onAccent}
+            />
+          </Pressable>
         </View>
 
         {fallbackToAll ? (
@@ -107,6 +153,14 @@ export function ClientList() {
           })}
         </ScrollView>
       </View>
+
+      <ChannelSheet
+        visible={channelSheetVisible}
+        onClose={() => setChannelSheetVisible(false)}
+        activeChannel={channelFilter}
+        onSelect={setChannelFilter}
+        counts={channelCounts}
+      />
 
       <FlatList
         data={listClients}
@@ -207,10 +261,16 @@ const styles = StyleSheet.create({
   },
   controls: {
     paddingHorizontal: Spacing.three,
-    paddingTop: Spacing.three,
+    paddingTop: Spacing.two,
+    gap: Spacing.two,
+  },
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: Spacing.two,
   },
   segment: {
+    flex: 1,
     flexDirection: 'row',
     borderRadius: Radius.md,
     padding: 4,
@@ -218,7 +278,7 @@ const styles = StyleSheet.create({
   },
   segmentButton: {
     flex: 1,
-    height: 36,
+    height: ControlHeight.segment,
     borderRadius: Radius.sm,
     alignItems: 'center',
     justifyContent: 'center',
@@ -241,7 +301,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
-    height: 44,
+    height: ControlHeight.input,
     borderRadius: Radius.md,
     borderWidth: 1,
     paddingHorizontal: Spacing.three,
@@ -255,22 +315,36 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     paddingVertical: Spacing.one,
   },
+  channelButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    gap: 4,
+    height: ControlHeight.segment,
+    paddingHorizontal: Spacing.two,
+    borderRadius: Radius.md,
+  },
+  channelButtonLabel: {
+    fontSize: 11,
+    maxWidth: 90,
+  },
   statusChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: Spacing.two,
-    paddingVertical: 7,
+    gap: 5,
+    paddingHorizontal: ChipPadding.horizontal,
+    paddingVertical: ChipPadding.vertical,
     borderRadius: Radius.pill,
     borderWidth: 1,
   },
   statusChipDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   statusChipText: {
-    fontSize: 12,
+    fontSize: 11,
   },
   listContent: {
     paddingHorizontal: Spacing.three,

@@ -3,19 +3,23 @@ import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ChannelSheet } from '@/components/map/channel-sheet';
 import { ClientInfoSheet } from '@/components/map/client-info-sheet';
 import { ClientList } from '@/components/map/client-list';
 import { LeafletMap } from '@/components/map/leaflet-map';
 import { MapLegend } from '@/components/map/map-legend';
 import { ThemedText } from '@/components/themed-text';
 import { Icon, type IconName } from '@/components/ui/icon';
-import { FloatingShadow, Radius, Spacing } from '@/constants/theme';
+import { ChipPadding, ControlHeight, FloatingShadow, Radius, Spacing } from '@/constants/theme';
 import {
+  CHANNEL_META,
+  CHANNEL_ORDER,
   mapClients,
   routeBlocks,
   STATUS_META,
   STATUS_ORDER,
   type MapClient,
+  type SalesChannel,
   type VisitStatus,
 } from '@/data/mock-clients';
 import { mockSeller } from '@/data/mock-user';
@@ -25,6 +29,7 @@ import { convexHull, nearestNeighborOrder } from '@/utils/geo';
 type Filter = 'today' | 'all';
 type ViewMode = 'map' | 'list';
 type StatusFilter = VisitStatus | 'all';
+type ChannelFilter = SalesChannel | 'all';
 
 export default function MapScreen() {
   const theme = useTheme();
@@ -41,7 +46,6 @@ export default function MapScreen() {
       block: theme.accent,
       bounds: theme.success,
       user: theme.accent,
-      route: theme.accent,
     }),
     [theme],
   );
@@ -49,6 +53,8 @@ export default function MapScreen() {
   const [viewMode, setViewMode] = useState<ViewMode>('map');
   const [filter, setFilter] = useState<Filter>('today');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [channelFilter, setChannelFilter] = useState<ChannelFilter>('all');
+  const [channelSheetVisible, setChannelSheetVisible] = useState(false);
   const [showBlocks, setShowBlocks] = useState(false);
   const [showBounds, setShowBounds] = useState(false);
   const [routeMode, setRouteMode] = useState(false);
@@ -56,9 +62,20 @@ export default function MapScreen() {
 
   const baseClients =
     filter === 'today' ? (todayClients.length > 0 ? todayClients : mapClients) : mapClients;
+
+  const channelCounts = useMemo(() => {
+    const counts = {} as Record<SalesChannel, number>;
+    CHANNEL_ORDER.forEach((channel) => (counts[channel] = 0));
+    baseClients.forEach((c) => (counts[c.channel] += 1));
+    return counts;
+  }, [baseClients]);
+
   const displayedClients = useMemo(
-    () => (statusFilter === 'all' ? baseClients : baseClients.filter((c) => c.status === statusFilter)),
-    [baseClients, statusFilter],
+    () =>
+      baseClients
+        .filter((c) => statusFilter === 'all' || c.status === statusFilter)
+        .filter((c) => channelFilter === 'all' || c.channel === channelFilter),
+    [baseClients, statusFilter, channelFilter],
   );
 
   // Optimal visit order (nearest-neighbor by proximity) over the displayed clients.
@@ -71,16 +88,6 @@ export default function MapScreen() {
     orderedRoute?.forEach((c, index) => (map[c.id] = index + 1));
     return map;
   }, [orderedRoute]);
-  const routePath = useMemo<[number, number][]>(
-    () =>
-      orderedRoute
-        ? [
-            [mockSeller.location.lat, mockSeller.location.lng],
-            ...orderedRoute.map((c) => [c.lat, c.lng] as [number, number]),
-          ]
-        : [],
-    [orderedRoute],
-  );
 
   return (
     <View style={[styles.root, { backgroundColor: theme.background }]}>
@@ -88,7 +95,7 @@ export default function MapScreen() {
         <View style={styles.headerRow}>
           <Pressable
             hitSlop={8}
-            onPress={() => router.canGoBack() && router.back()}
+            onPress={() => router.replace('/' as Href)}
             style={[styles.roundButton, { backgroundColor: theme.backgroundElement }]}>
             <Icon name="chevron.left" size={18} color={theme.text} />
           </Pressable>
@@ -110,13 +117,38 @@ export default function MapScreen() {
       {viewMode === 'map' ? (
         <>
           <View style={styles.controls}>
-            <View style={[styles.segment, { backgroundColor: theme.backgroundElement }]}>
-              <SegmentButton
-                label="Por visitar hoy"
-                active={filter === 'today'}
-                onPress={() => setFilter('today')}
-              />
-              <SegmentButton label="Todos" active={filter === 'all'} onPress={() => setFilter('all')} />
+            <View style={styles.topRow}>
+              <View style={[styles.segment, { backgroundColor: theme.backgroundElement }]}>
+                <SegmentButton
+                  label="Por visitar hoy"
+                  active={filter === 'today'}
+                  onPress={() => setFilter('today')}
+                />
+                <SegmentButton label="Todos" active={filter === 'all'} onPress={() => setFilter('all')} />
+              </View>
+
+              <Pressable
+                onPress={() => setChannelSheetVisible(true)}
+                style={[
+                  styles.channelButton,
+                  { backgroundColor: channelFilter === 'all' ? theme.backgroundElement : theme.accent },
+                ]}>
+                <Icon name="tag.fill" size={12} color={channelFilter === 'all' ? theme.textSecondary : theme.onAccent} />
+                <ThemedText
+                  type="smallBold"
+                  numberOfLines={1}
+                  style={[
+                    styles.channelButtonLabel,
+                    { color: channelFilter === 'all' ? theme.textSecondary : theme.onAccent },
+                  ]}>
+                  {channelFilter === 'all' ? 'Canal' : CHANNEL_META[channelFilter].label}
+                </ThemedText>
+                <Icon
+                  name="chevron.down"
+                  size={10}
+                  color={channelFilter === 'all' ? theme.textSecondary : theme.onAccent}
+                />
+              </Pressable>
             </View>
 
             <ScrollView
@@ -146,6 +178,14 @@ export default function MapScreen() {
             </ScrollView>
           </View>
 
+          <ChannelSheet
+            visible={channelSheetVisible}
+            onClose={() => setChannelSheetVisible(false)}
+            activeChannel={channelFilter}
+            onSelect={setChannelFilter}
+            counts={channelCounts}
+          />
+
           <View style={styles.mapWrapper}>
             <View style={[styles.mapCard, { borderColor: theme.border }]}>
               <LeafletMap
@@ -156,7 +196,6 @@ export default function MapScreen() {
                 showBounds={showBounds}
                 userLocation={mockSeller.location}
                 order={routeOrder}
-                routePath={routePath}
                 colors={colors}
                 onSelect={(id) => {
                   const client = mapClients.find((c) => c.id === id);
@@ -342,7 +381,7 @@ const styles = StyleSheet.create({
   },
   viewToggleButton: {
     width: 34,
-    height: 30,
+    height: ControlHeight.segment,
     borderRadius: Radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
@@ -352,7 +391,13 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.two,
     gap: Spacing.two,
   },
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
   segment: {
+    flex: 1,
     flexDirection: 'row',
     borderRadius: Radius.md,
     padding: 3,
@@ -360,7 +405,7 @@ const styles = StyleSheet.create({
   },
   segmentButton: {
     flex: 1,
-    height: 32,
+    height: ControlHeight.segment,
     borderRadius: Radius.sm,
     alignItems: 'center',
     justifyContent: 'center',
@@ -372,19 +417,33 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingVertical: 2,
   },
+  channelButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    gap: 4,
+    height: ControlHeight.segment,
+    paddingHorizontal: Spacing.two,
+    borderRadius: Radius.md,
+  },
+  channelButtonLabel: {
+    fontSize: 11,
+    maxWidth: 90,
+  },
   statusChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: ChipPadding.horizontal,
+    paddingVertical: ChipPadding.vertical,
     borderRadius: Radius.pill,
     borderWidth: 1,
   },
   statusChipDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   statusChipText: {
     fontSize: 11,
@@ -412,8 +471,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: ChipPadding.horizontal,
+    paddingVertical: ChipPadding.vertical,
     borderRadius: Radius.pill,
   },
   layerLabel: {

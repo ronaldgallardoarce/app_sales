@@ -12,7 +12,7 @@ import { ProductCard, PRODUCT_CARD_HEIGHT } from '@/components/catalog/product-c
 import { ProductDetailSheet } from '@/components/product-detail/product-detail-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
-import { Radius, Spacing } from '@/constants/theme';
+import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
 import {
   estrategiaProducts,
@@ -359,7 +359,7 @@ const styles = StyleSheet.create({
   },
   controls: {
     paddingHorizontal: Spacing.three,
-    paddingTop: Spacing.three,
+    paddingTop: Spacing.two,
     gap: Spacing.two,
   },
   togglesRow: {
@@ -390,7 +390,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    height: 40,
+    height: ControlHeight.input,
     borderRadius: Radius.md,
     borderWidth: 1,
   },
@@ -400,7 +400,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    height: 40,
+    height: ControlHeight.input,
     borderRadius: Radius.md,
   },
   buttonLabel: {
@@ -415,7 +415,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
-    height: 44,
+    height: ControlHeight.input,
     borderRadius: Radius.md,
     borderWidth: 1,
     paddingHorizontal: Spacing.three,
@@ -426,8 +426,8 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
   },
   filterButton: {
-    width: 44,
-    height: 44,
+    width: ControlHeight.input,
+    height: ControlHeight.input,
     borderRadius: Radius.md,
     borderWidth: 1,
     alignItems: 'center',
@@ -444,8 +444,8 @@ const styles = StyleSheet.create({
   sortPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: Spacing.two,
-    paddingVertical: 6,
+    paddingHorizontal: ChipPadding.horizontal,
+    paddingVertical: ChipPadding.vertical,
     borderRadius: Radius.pill,
     borderWidth: 1,
   },

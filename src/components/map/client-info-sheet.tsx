@@ -3,7 +3,7 @@ import { Linking, Pressable, StyleSheet, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { Icon, type IconName } from '@/components/ui/icon';
-import { Radius, Spacing } from '@/constants/theme';
+import { ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { CHANNEL_META, STATUS_META, type MapClient } from '@/data/mock-clients';
 import { useTheme } from '@/hooks/use-theme';
 
@@ -113,15 +113,15 @@ const styles = StyleSheet.create({
   badge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: 4,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: Radius.pill,
   },
   badgeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
   },
   badgeText: {
     fontSize: 10,
@@ -157,7 +157,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.two,
-    height: 48,
+    height: ControlHeight.input,
     borderRadius: Radius.md,
   },
   outlineButton: {
@@ -166,7 +166,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.two,
-    height: 48,
+    height: ControlHeight.input,
     borderRadius: Radius.md,
     borderWidth: 1,
   },
