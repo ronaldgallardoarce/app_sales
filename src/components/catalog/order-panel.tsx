@@ -3,7 +3,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react
 
 import { Icon } from '@/components/ui/icon';
 import { ThemedText } from '@/components/themed-text';
-import { Radius, Spacing } from '@/constants/theme';
+import { ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
 import { useTheme } from '@/hooks/use-theme';
 import { formatBs } from '@/utils/currency';
@@ -223,17 +223,18 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   chip: {
-    paddingHorizontal: Spacing.three,
-    paddingVertical: 8,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 6,
     borderRadius: Radius.pill,
     borderWidth: 1,
   },
   chipText: {
     fontSize: 12,
+    lineHeight: 16,
     fontWeight: '700',
   },
   bonusInput: {
-    height: 44,
+    height: ControlHeight.input,
     borderRadius: Radius.md,
     borderWidth: 1,
     paddingHorizontal: Spacing.three,
@@ -265,7 +266,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    height: 44,
+    height: ControlHeight.input,
     borderRadius: Radius.md,
     borderWidth: 1,
   },
@@ -275,7 +276,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    height: 44,
+    height: ControlHeight.input,
     borderRadius: Radius.md,
   },
   buttonLabel: {

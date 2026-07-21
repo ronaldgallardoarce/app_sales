@@ -9,6 +9,7 @@ const GLYPHS = {
   plus: 'plus',
   minus: 'minus',
   xmark: 'close',
+  'xmark.circle.fill': 'close-circle',
   checkmark: 'check',
   'checkmark.circle.fill': 'check-circle',
   'square.grid.2x2': 'view-grid-outline',

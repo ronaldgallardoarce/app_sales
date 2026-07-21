@@ -11,8 +11,8 @@ export type Seller = {
 export const mockSeller: Seller = {
   name: 'Daniel Durán',
   code: 'VEN-0428',
-  zone: 'Zona Sur · La Paz',
+  zone: 'Equipetrol · Santa Cruz de la Sierra',
   route: 'Ruta 12',
   lastSync: 'hace 2 h',
-  location: { lat: -16.4962, lng: -68.1376 },
+  location: { lat: -17.7683, lng: -63.1812 },
 };

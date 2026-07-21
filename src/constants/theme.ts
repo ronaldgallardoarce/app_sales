@@ -120,5 +120,19 @@ export const Spacing = {
   six: 64,
 } as const;
 
+/** Shared control heights so inputs and buttons line up the same across every screen. */
+export const ControlHeight = {
+  /** Search boxes, text inputs, and full-width action buttons. */
+  input: 40,
+  /** Segmented toggle buttons (e.g. "Hoy" / "Todos"). */
+  segment: 30,
+} as const;
+
+/** Shared padding for filter/status pills so they read as one compact, consistent size. */
+export const ChipPadding = {
+  horizontal: 10,
+  vertical: 4,
+} as const;
+
 export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
 export const MaxContentWidth = 800;
