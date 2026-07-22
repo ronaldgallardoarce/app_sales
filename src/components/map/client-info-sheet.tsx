@@ -11,10 +11,17 @@ export function ClientInfoSheet({
   client,
   onClose,
   onViewClient,
+  directionsAvailable,
+  directionsActive,
+  onToggleDirections,
 }: {
   client: MapClient | null;
   onClose: () => void;
   onViewClient: (client: MapClient) => void;
+  /** Whether this client is part of an already-computed optimal route — only then can we highlight the path to it. */
+  directionsAvailable?: boolean;
+  directionsActive?: boolean;
+  onToggleDirections?: (client: MapClient) => void;
 }) {
   const theme = useTheme();
 
@@ -27,7 +34,7 @@ export function ClientInfoSheet({
       onClose={onClose}
       footer={
         client ? (
-          <View style={styles.footerButtons}>
+          <View style={styles.footerColumn}>
             <Pressable
               onPress={() => onViewClient(client)}
               style={[styles.primaryButton, { backgroundColor: theme.accent }]}>
@@ -36,12 +43,29 @@ export function ClientInfoSheet({
                 Ver cliente
               </ThemedText>
             </Pressable>
-            <Pressable
-              onPress={() => openInGoogleMaps(client)}
-              style={[styles.outlineButton, { borderColor: theme.border, backgroundColor: theme.backgroundElement }]}>
-              <Icon name="map" size={16} color={theme.text} />
-              <ThemedText type="smallBold">Google Maps</ThemedText>
-            </Pressable>
+            <View style={styles.footerButtons}>
+              {directionsAvailable ? (
+                <Pressable
+                  onPress={() => onToggleDirections?.(client)}
+                  style={[
+                    styles.outlineButton,
+                    directionsActive
+                      ? { borderColor: theme.accentAlt, backgroundColor: theme.accentAltSoft }
+                      : { borderColor: theme.border, backgroundColor: theme.backgroundElement },
+                  ]}>
+                  <Icon name="route" size={16} color={directionsActive ? theme.accentAlt : theme.text} />
+                  <ThemedText type="smallBold" style={{ color: directionsActive ? theme.accentAlt : theme.text }}>
+                    {directionsActive ? 'Ocultar ruta' : 'Cómo llegar'}
+                  </ThemedText>
+                </Pressable>
+              ) : null}
+              <Pressable
+                onPress={() => openInGoogleMaps(client)}
+                style={[styles.outlineButton, { borderColor: theme.border, backgroundColor: theme.backgroundElement }]}>
+                <Icon name="map" size={16} color={theme.text} />
+                <ThemedText type="smallBold">Google Maps</ThemedText>
+              </Pressable>
+            </View>
           </View>
         ) : null
       }>
@@ -144,15 +168,17 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'right',
   },
+  footerColumn: {
+    gap: Spacing.two,
+    width: '100%',
+  },
   footerButtons: {
     gap: Spacing.two,
     flexDirection: 'row',
-    paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.two,
     width: '100%',
   },
   primaryButton: {
-    flex: 1,
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',

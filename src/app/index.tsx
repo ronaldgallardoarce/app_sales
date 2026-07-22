@@ -6,6 +6,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
 import { CardShadow, Radius, Spacing } from '@/constants/theme';
+import { CHANNEL_META } from '@/data/mock-clients';
 import { menuOptions, type MenuOption } from '@/data/menu-options';
 import { mockSeller } from '@/data/mock-user';
 import { useTheme, useThemeScheme, useThemeToggle } from '@/hooks/use-theme';
@@ -34,6 +35,12 @@ export default function HomeScreen() {
             <ThemedText type="smallBold" style={styles.sellerName} numberOfLines={1}>
               {mockSeller.name}
             </ThemedText>
+            <View style={[styles.channelBadge, { backgroundColor: theme.accentSoft }]}>
+              <Icon name="tag.fill" size={10} color={theme.accent} />
+              <ThemedText type="small" style={[styles.channelBadgeText, { color: theme.accent }]} numberOfLines={1}>
+                {CHANNEL_META[mockSeller.channel].label}
+              </ThemedText>
+            </View>
           </View>
 
           <Pressable
@@ -128,6 +135,19 @@ const styles = StyleSheet.create({
   },
   sellerName: {
     fontSize: 18,
+  },
+  channelBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 4,
+    marginTop: 3,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: Radius.pill,
+  },
+  channelBadgeText: {
+    fontSize: 11,
   },
   roundButton: {
     width: 34,

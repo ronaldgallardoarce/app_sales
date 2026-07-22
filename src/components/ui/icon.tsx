@@ -51,6 +51,10 @@ const GLYPHS = {
   polygon: 'vector-polygon',
   'square.dashed': 'vector-square',
   route: 'map-marker-path',
+  'hand.tap': 'gesture-tap',
+  'figure.walk': 'walk',
+  'car.fill': 'car-outline',
+  'moto.fill': 'motorbike',
 } as const;
 
 export type IconName = keyof typeof GLYPHS;

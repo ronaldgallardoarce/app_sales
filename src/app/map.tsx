@@ -1,13 +1,14 @@
 import { useRouter, type Href } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ChannelSheet } from '@/components/map/channel-sheet';
 import { ClientInfoSheet } from '@/components/map/client-info-sheet';
 import { ClientList } from '@/components/map/client-list';
 import { LeafletMap } from '@/components/map/leaflet-map';
 import { MapLegend } from '@/components/map/map-legend';
+import { RouteSheet } from '@/components/map/route-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { Icon, type IconName } from '@/components/ui/icon';
 import { ChipPadding, ControlHeight, FloatingShadow, Radius, Spacing } from '@/constants/theme';
@@ -24,16 +25,19 @@ import {
 } from '@/data/mock-clients';
 import { mockSeller } from '@/data/mock-user';
 import { useTheme } from '@/hooks/use-theme';
-import { convexHull, nearestNeighborOrder } from '@/utils/geo';
+import { convexHull } from '@/utils/geo';
+import { resolveOptimalRoute, type LatLng, type TravelMode } from '@/utils/routing';
 
 type Filter = 'today' | 'all';
 type ViewMode = 'map' | 'list';
 type StatusFilter = VisitStatus | 'all';
 type ChannelFilter = SalesChannel | 'all';
+type RouteOriginMode = 'current' | 'custom';
 
 export default function MapScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   const todayClients = useMemo(() => mapClients.filter((c) => c.visitToday), []);
   const boundsPolygon = useMemo(() => convexHull(routeBlocks.flat()), []);
@@ -46,6 +50,8 @@ export default function MapScreen() {
       block: theme.accent,
       bounds: theme.success,
       user: theme.accent,
+      route: theme.accent,
+      directions: theme.accentAlt,
     }),
     [theme],
   );
@@ -58,7 +64,18 @@ export default function MapScreen() {
   const [showBlocks, setShowBlocks] = useState(false);
   const [showBounds, setShowBounds] = useState(false);
   const [routeMode, setRouteMode] = useState(false);
+  const [routeSheetVisible, setRouteSheetVisible] = useState(false);
+  const [routeOriginMode, setRouteOriginMode] = useState<RouteOriginMode | null>(null);
+  const [customStart, setCustomStart] = useState<LatLng | null>(null);
+  const [pickingStart, setPickingStart] = useState(false);
+  const [travelMode, setTravelMode] = useState<TravelMode>('driving');
+  const [routeResult, setRouteResult] = useState<{ order: MapClient[]; legs: LatLng[][] } | null>(
+    null,
+  );
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
   const [selectedClient, setSelectedClient] = useState<MapClient | null>(null);
+  const [directionsTargetId, setDirectionsTargetId] = useState<string | null>(null);
 
   const baseClients =
     filter === 'today' ? (todayClients.length > 0 ? todayClients : mapClients) : mapClients;
@@ -78,16 +95,64 @@ export default function MapScreen() {
     [baseClients, statusFilter, channelFilter],
   );
 
-  // Optimal visit order (nearest-neighbor by proximity) over the displayed clients.
-  const orderedRoute = useMemo(
-    () => (routeMode ? nearestNeighborOrder(mockSeller.location, displayedClients) : null),
-    [routeMode, displayedClients],
-  );
+  // The route is only calculated once the user explicitly picks a starting point
+  // (current location, or a point they choose on the map) — not just by enabling the layer.
+  useEffect(() => {
+    if (!routeMode) {
+      setRouteResult(null);
+      setRouteError(null);
+      setDirectionsTargetId(null);
+      return;
+    }
+
+    const origin: LatLng | null =
+      routeOriginMode === 'current'
+        ? mockSeller.location
+        : routeOriginMode === 'custom' && customStart
+          ? customStart
+          : null;
+
+    if (!origin) {
+      setRouteResult(null);
+      return;
+    }
+
+    let cancelled = false;
+    setRouteLoading(true);
+    setRouteError(null);
+
+    resolveOptimalRoute(origin, displayedClients, travelMode)
+      .then(({ order, legs, usedRoadNetwork }) => {
+        if (cancelled) return;
+        setRouteResult({ order, legs });
+        if (!usedRoadNetwork && displayedClients.length > 0) {
+          setRouteError('No se pudo calcular por calles; se usó una aproximación en línea recta.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRouteLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [routeMode, routeOriginMode, customStart, travelMode, displayedClients]);
+
   const routeOrder = useMemo(() => {
     const map: Record<string, number> = {};
-    orderedRoute?.forEach((c, index) => (map[c.id] = index + 1));
+    routeResult?.order.forEach((c, index) => (map[c.id] = index + 1));
     return map;
-  }, [orderedRoute]);
+  }, [routeResult]);
+
+  // "Cómo llegar" only makes sense once an optimal route has been calculated — it
+  // highlights the already-computed path up to that client's stop (no extra fetch),
+  // so it stays consistent with the route actually being followed.
+  const directionsLegs = useMemo(() => {
+    if (!directionsTargetId || !routeResult) return null;
+    const stopIndex = routeOrder[directionsTargetId];
+    if (!stopIndex) return null;
+    return routeResult.legs.slice(0, stopIndex);
+  }, [directionsTargetId, routeResult, routeOrder]);
 
   return (
     <View style={[styles.root, { backgroundColor: theme.background }]}>
@@ -186,7 +251,7 @@ export default function MapScreen() {
             counts={channelCounts}
           />
 
-          <View style={styles.mapWrapper}>
+          <View style={[styles.mapWrapper, { paddingBottom: Spacing.three + insets.bottom }]}>
             <View style={[styles.mapCard, { borderColor: theme.border }]}>
               <LeafletMap
                 clients={displayedClients}
@@ -197,9 +262,18 @@ export default function MapScreen() {
                 userLocation={mockSeller.location}
                 order={routeOrder}
                 colors={colors}
+                routeStart={routeOriginMode === 'custom' ? customStart : null}
+                routeLegs={routeResult?.legs ?? null}
+                directionsLegs={directionsLegs}
+                pickMode={pickingStart}
                 onSelect={(id) => {
                   const client = mapClients.find((c) => c.id === id);
                   if (client) setSelectedClient(client);
+                }}
+                onPickPoint={(point) => {
+                  setCustomStart(point);
+                  setPickingStart(false);
+                  setRouteSheetVisible(true);
                 }}
               />
 
@@ -220,9 +294,46 @@ export default function MapScreen() {
                   icon="route"
                   label="Ruta óptima"
                   active={routeMode}
-                  onPress={() => setRouteMode((v) => !v)}
+                  onPress={() => setRouteSheetVisible(true)}
                 />
               </View>
+
+              {pickingStart || routeLoading || routeError ? (
+                <View style={styles.statusOverlay} pointerEvents="box-none">
+                  {pickingStart ? (
+                    <View style={[styles.statusBanner, FloatingShadow, { backgroundColor: theme.accent }]}>
+                      <Icon name="hand.tap" size={12} color={theme.onAccent} />
+                      <ThemedText
+                        type="smallBold"
+                        numberOfLines={1}
+                        style={[styles.statusBannerText, { color: theme.onAccent, flexShrink: 1 }]}>
+                        Toca el mapa o un cliente para elegir el inicio
+                      </ThemedText>
+                      <Pressable
+                        hitSlop={8}
+                        onPress={() => {
+                          setPickingStart(false);
+                          if (!customStart) setRouteOriginMode(null);
+                          setRouteSheetVisible(true);
+                        }}>
+                        <Icon name="xmark.circle.fill" size={14} color={theme.onAccent} />
+                      </Pressable>
+                    </View>
+                  ) : routeLoading ? (
+                    <View style={[styles.statusBanner, FloatingShadow, { backgroundColor: theme.backgroundElement }]}>
+                      <ThemedText type="smallBold" style={[styles.statusBannerText, { color: theme.textSecondary }]}>
+                        Calculando ruta óptima…
+                      </ThemedText>
+                    </View>
+                  ) : routeError ? (
+                    <View style={[styles.statusBanner, FloatingShadow, { backgroundColor: theme.dangerSoft }]}>
+                      <ThemedText type="smallBold" style={[styles.statusBannerText, { color: theme.danger }]}>
+                        {routeError}
+                      </ThemedText>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
 
               <View style={styles.legendOverlay} pointerEvents="box-none">
                 <MapLegend clients={baseClients} />
@@ -236,6 +347,37 @@ export default function MapScreen() {
             onViewClient={() => {
               setSelectedClient(null);
               router.push('/catalog' as Href);
+            }}
+            directionsAvailable={routeMode && !!selectedClient && routeOrder[selectedClient.id] !== undefined}
+            directionsActive={selectedClient !== null && directionsTargetId === selectedClient.id}
+            onToggleDirections={(c) => setDirectionsTargetId((current) => (current === c.id ? null : c.id))}
+          />
+
+          <RouteSheet
+            visible={routeSheetVisible}
+            onClose={() => setRouteSheetVisible(false)}
+            originMode={routeOriginMode}
+            hasCustomStart={customStart !== null}
+            travelMode={travelMode}
+            routeActive={routeMode}
+            onSelectOrigin={(origin) => {
+              setRouteOriginMode(origin);
+              if (origin === 'custom') {
+                setRouteSheetVisible(false);
+                setPickingStart(true);
+              }
+            }}
+            onConfirm={(mode) => {
+              setTravelMode(mode);
+              setRouteMode(true);
+              setRouteSheetVisible(false);
+            }}
+            onClear={() => {
+              setRouteMode(false);
+              setRouteOriginMode(null);
+              setCustomStart(null);
+              setPickingStart(false);
+              setRouteSheetVisible(false);
             }}
           />
         </>
@@ -452,7 +594,6 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: Spacing.three,
     paddingTop: Spacing.two,
-    paddingBottom: Spacing.three,
   },
   mapCard: {
     flex: 1,
@@ -477,6 +618,24 @@ const styles = StyleSheet.create({
   },
   layerLabel: {
     fontSize: 12,
+  },
+  statusOverlay: {
+    position: 'absolute',
+    bottom: Spacing.two,
+    left: Spacing.two,
+    right: Spacing.two,
+    alignItems: 'center',
+  },
+  statusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: ChipPadding.horizontal,
+    paddingVertical: ChipPadding.vertical,
+    borderRadius: Radius.pill,
+  },
+  statusBannerText: {
+    fontSize: 11,
   },
   legendOverlay: {
     position: 'absolute',
