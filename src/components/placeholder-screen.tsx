@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { Icon, type IconName } from '@/components/ui/icon';
@@ -29,6 +29,7 @@ export function PlaceholderScreen({
 }: PlaceholderScreenProps) {
   const theme = useTheme();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   return (
     <View style={[styles.root, { backgroundColor: theme.background }]}>
@@ -46,7 +47,7 @@ export function PlaceholderScreen({
         </View>
       </SafeAreaView>
 
-      <View style={styles.body}>
+      <View style={[styles.body, { paddingBottom: insets.bottom + Spacing.three }]}>
         <View style={[styles.iconWrap, { backgroundColor: theme[softToken] }]}>
           <Icon name={icon} size={32} color={theme[colorToken]} />
         </View>
