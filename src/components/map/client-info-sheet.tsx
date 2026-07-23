@@ -83,6 +83,8 @@ export function ClientInfoSheet({
             <InfoRow icon="mappin" label="Dirección" value={client.address} />
             <InfoRow icon="map" label="Ruta" value={client.route} />
             <InfoRow icon="tag.fill" label="Canal" value={CHANNEL_META[client.channel].label} />
+            <InfoRow icon="cash" label="Ticket prom." value={`Bs ${client.avgTicket}`} />
+            <InfoRow icon="shippingbox.fill" label="Drop size" value={`Bs ${client.dropSize}`} />
           </View>
         </View>
       ) : null}

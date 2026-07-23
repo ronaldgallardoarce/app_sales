@@ -7,7 +7,7 @@ import { Icon, type IconName } from '@/components/ui/icon';
 import { CardShadow, ChipPadding, Radius, Spacing } from '@/constants/theme';
 import { STATUS_META, type MapClient } from '@/data/mock-clients';
 import { mockSeller } from '@/data/mock-user';
-import { useTheme } from '@/hooks/use-theme';
+import { useTheme, useThemeScheme } from '@/hooks/use-theme';
 import { distanceKm, formatDistance } from '@/utils/geo';
 
 const WHATSAPP_GREEN = '#25D366';
@@ -29,9 +29,13 @@ export function ClientCard({
   onPress: (client: MapClient) => void;
 }) {
   const theme = useTheme();
+  const scheme = useThemeScheme();
   const status = STATUS_META[client.status];
   const statusColor = theme[status.color];
   const distance = formatDistance(distanceKm(mockSeller.location, client));
+
+  // Dark surfaces swallow low-alpha tints, so the status wash needs more opacity there than on light.
+  const gradientAlphas = scheme === 'dark' ? [0.3, 0.12, 0] : [0.16, 0.04, 0];
 
   const digits = client.phone.replace(/\D/g, '');
   const openWhatsApp = () => Linking.openURL(`https://wa.me/${digits}`);
@@ -43,7 +47,11 @@ export function ClientCard({
       style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }, CardShadow]}>
       <LinearGradient
         pointerEvents="none"
-        colors={[withAlpha(statusColor, 0.16), withAlpha(statusColor, 0.04), withAlpha(statusColor, 0)]}
+        colors={[
+          withAlpha(statusColor, gradientAlphas[0]),
+          withAlpha(statusColor, gradientAlphas[1]),
+          withAlpha(statusColor, gradientAlphas[2]),
+        ]}
         locations={[0, 0.45, 0.8]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
@@ -53,7 +61,7 @@ export function ClientCard({
       <View style={styles.body}>
         <View style={styles.headerRow}>
           <ThemedText type="smallBold" style={styles.title} numberOfLines={1}>
-            {client.code} · {client.name}
+            {client.code}-{client.name}
           </ThemedText>
           <View style={[styles.statusBadge, { backgroundColor: theme[status.soft], borderColor: statusColor }]}>
             <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
@@ -63,7 +71,7 @@ export function ClientCard({
           </View>
         </View>
 
-        <MetaRow icon="person.fill" label="Propietario" value={client.owner} />
+        <MetaRow icon="person.fill" label="Propietario" value={`${client.code}-${client.owner}`} />
 
         <MetaRow
           icon="map"
@@ -78,6 +86,11 @@ export function ClientCard({
             </View>
           }
         />
+
+        <View style={styles.statsRow}>
+          <StatChip icon="cash" label="Ticket" value={`Bs ${client.avgTicket}`} />
+          <StatChip icon="shippingbox.fill" label="Drop" value={`Bs ${client.dropSize}`} />
+        </View>
 
         <View style={styles.footerRow}>
           <View style={styles.phoneRow}>
@@ -123,6 +136,25 @@ function MetaRow({
         {value}
       </ThemedText>
       {trailing}
+    </View>
+  );
+}
+
+function StatChip({ icon, label, value }: { icon: IconName; label: string; value: string }) {
+  const theme = useTheme();
+  return (
+    <View
+      style={[
+        styles.statChip,
+        { backgroundColor: withAlpha(theme.accent, 0.07), borderColor: withAlpha(theme.accent, 0.35) },
+      ]}>
+      <Icon name={icon} size={12} color={theme.accent} />
+      <ThemedText type="small" numberOfLines={1} style={[styles.statLabel, { color: theme.accent }]}>
+        {label}
+      </ThemedText>
+      <ThemedText type="smallBold" numberOfLines={1} style={styles.statValue}>
+        {value}
+      </ThemedText>
     </View>
   );
 }
@@ -174,6 +206,28 @@ const styles = StyleSheet.create({
   },
   metaValue: {
     flex: 1,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+  },
+  statChip: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 3,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+  },
+  statLabel: {
+    flexShrink: 1,
+    fontSize: 11,
+  },
+  statValue: {
+    marginLeft: 'auto',
+    fontSize: 12,
   },
   distanceChip: {
     flexDirection: 'row',

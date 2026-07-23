@@ -1,10 +1,11 @@
 import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, View } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { Icon, type IconName } from '@/components/ui/icon';
 import { ControlHeight, Radius, Spacing } from '@/constants/theme';
+import { useContentInsets } from '@/hooks/use-content-insets';
 import { useTheme } from '@/hooks/use-theme';
 
 type ColorToken = 'accent' | 'success' | 'accentAlt' | 'violet';
@@ -29,7 +30,7 @@ export function PlaceholderScreen({
 }: PlaceholderScreenProps) {
   const theme = useTheme();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const insets = useContentInsets();
 
   return (
     <View style={[styles.root, { backgroundColor: theme.background }]}>

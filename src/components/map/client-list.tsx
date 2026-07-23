@@ -1,24 +1,21 @@
 import { useRouter, type Href } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
 import { ChannelSheet } from '@/components/map/channel-sheet';
 import { ClientCard } from '@/components/map/client-card';
-import { ClientInfoSheet } from '@/components/map/client-info-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
 import {
   CHANNEL_META,
   CHANNEL_ORDER,
-  mapClients,
   STATUS_META,
   STATUS_ORDER,
-  type MapClient,
   type SalesChannel,
   type VisitStatus,
 } from '@/data/mock-clients';
+import { useClientVisits } from '@/context/client-visit-context';
+import { useContentInsets } from '@/hooks/use-content-insets';
 import { useTheme } from '@/hooks/use-theme';
 
 type Filter = 'today' | 'all';
@@ -28,20 +25,20 @@ type ChannelFilter = SalesChannel | 'all';
 export function ClientList() {
   const theme = useTheme();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const insets = useContentInsets();
+  const { clients } = useClientVisits();
 
-  const todayClients = useMemo(() => mapClients.filter((c) => c.visitToday), []);
+  const todayClients = useMemo(() => clients.filter((c) => c.visitToday), [clients]);
 
   const [filter, setFilter] = useState<Filter>('today');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>('all');
   const [channelSheetVisible, setChannelSheetVisible] = useState(false);
   const [query, setQuery] = useState('');
-  const [selectedClient, setSelectedClient] = useState<MapClient | null>(null);
 
   const fallbackToAll = filter === 'today' && todayClients.length === 0;
   const baseClients =
-    filter === 'today' ? (todayClients.length > 0 ? todayClients : mapClients) : mapClients;
+    filter === 'today' ? (todayClients.length > 0 ? todayClients : clients) : clients;
 
   const channelCounts = useMemo(() => {
     const counts = {} as Record<SalesChannel, number>;
@@ -111,20 +108,30 @@ export function ClientList() {
           </View>
         ) : null}
 
-        <View style={[styles.searchBox, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-          <Icon name="magnifyingglass" size={16} color={theme.textSecondary} />
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder="Buscar por nombre, código o propietario"
-            placeholderTextColor={theme.textSecondary}
-            style={[styles.searchInput, { color: theme.text }]}
-          />
-          {query.length > 0 ? (
-            <Pressable hitSlop={8} onPress={() => setQuery('')}>
-              <Icon name="xmark" size={14} color={theme.textSecondary} />
-            </Pressable>
-          ) : null}
+        <View style={styles.searchRow}>
+          <View
+            style={[styles.searchBox, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+            <Icon name="magnifyingglass" size={16} color={theme.textSecondary} />
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Buscar por nombre, código o propietario"
+              placeholderTextColor={theme.textSecondary}
+              style={[styles.searchInput, { color: theme.text }]}
+            />
+            {query.length > 0 ? (
+              <Pressable hitSlop={8} onPress={() => setQuery('')}>
+                <Icon name="xmark" size={14} color={theme.textSecondary} />
+              </Pressable>
+            ) : null}
+          </View>
+
+          <View style={[styles.countPill, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+            <Icon name="person.2.fill" size={14} color={theme.accent} />
+            <ThemedText type="smallBold" style={styles.countPillText}>
+              {listClients.length}
+            </ThemedText>
+          </View>
         </View>
 
         <ScrollView
@@ -165,7 +172,9 @@ export function ClientList() {
       <FlatList
         data={listClients}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <ClientCard client={item} onPress={setSelectedClient} />}
+        renderItem={({ item }) => (
+          <ClientCard client={item} onPress={(c) => router.push(`/client/${c.id}` as Href)} />
+        )}
         contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + Spacing.four }]}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         showsVerticalScrollIndicator={false}
@@ -183,15 +192,6 @@ export function ClientList() {
             </ThemedText>
           </View>
         }
-      />
-
-      <ClientInfoSheet
-        client={selectedClient}
-        onClose={() => setSelectedClient(null)}
-        onViewClient={() => {
-          setSelectedClient(null);
-          router.push('/catalog' as Href);
-        }}
       />
     </View>
   );
@@ -297,7 +297,13 @@ const styles = StyleSheet.create({
   hintText: {
     flex: 1,
   },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
   searchBox: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
@@ -305,6 +311,19 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     borderWidth: 1,
     paddingHorizontal: Spacing.three,
+  },
+  countPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    height: ControlHeight.input,
+    paddingHorizontal: Spacing.three,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+  },
+  countPillText: {
+    fontSize: 14,
   },
   searchInput: {
     flex: 1,

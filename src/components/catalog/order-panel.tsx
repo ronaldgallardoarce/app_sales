@@ -11,7 +11,14 @@ import { formatBs } from '@/utils/currency';
 const PAYMENT_METHODS = ['Efectivo', 'Tarjeta', 'Transferencia', 'Crédito'] as const;
 const DISCOUNTS = [0, 5, 10, 15] as const;
 
-export function OrderPanel({ contentPaddingBottom }: { contentPaddingBottom: number }) {
+export function OrderPanel({
+  contentPaddingBottom,
+  onConfirmed,
+}: {
+  contentPaddingBottom: number;
+  /** Called after the order is confirmed — e.g. to close the client visit. */
+  onConfirmed?: () => void;
+}) {
   const theme = useTheme();
   const { lines, removeLine, setLineQty, clearCart, totalAmount } = useCart();
   const [paymentMethod, setPaymentMethod] = useState<(typeof PAYMENT_METHODS)[number]>('Efectivo');
@@ -27,7 +34,13 @@ export function OrderPanel({ contentPaddingBottom }: { contentPaddingBottom: num
 
   const handleConfirm = () => {
     Alert.alert('Pedido confirmado', `Se registró el pedido por ${formatBs(finalTotal)}.`, [
-      { text: 'OK', onPress: clearCart },
+      {
+        text: 'OK',
+        onPress: () => {
+          clearCart();
+          onConfirmed?.();
+        },
+      },
     ]);
   };
 

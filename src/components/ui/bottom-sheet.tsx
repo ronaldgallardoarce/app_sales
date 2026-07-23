@@ -8,8 +8,7 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
+import { useContentInsets } from '@/hooks/use-content-insets';
 import { Overlay, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
@@ -29,7 +28,7 @@ export function BottomSheet({
   maxHeight?: number;
 }) {
   const theme = useTheme();
-  const insets = useSafeAreaInsets();
+  const insets = useContentInsets();
   const translateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
   const [mounted, setMounted] = useState(visible);

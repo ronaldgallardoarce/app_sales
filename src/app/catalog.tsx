@@ -1,7 +1,7 @@
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useRef, useState, type ComponentProps } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, Switch, TextInput, View } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { CartSummaryBar } from '@/components/catalog/cart-bar';
 import { CategoriesSheet } from '@/components/catalog/categories-sheet';
@@ -14,6 +14,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
+import { useClientVisits } from '@/context/client-visit-context';
 import {
   estrategiaProducts,
   lastOrderLines,
@@ -21,6 +22,7 @@ import {
   mockProducts,
   ultimosVendidosProducts,
 } from '@/data/mock-catalog';
+import { useContentInsets } from '@/hooks/use-content-insets';
 import { useTheme, useThemeScheme, useThemeToggle } from '@/hooks/use-theme';
 import { CatalogTabKey, Product } from '@/types/catalog';
 
@@ -64,7 +66,12 @@ export default function CatalogScreen() {
   const toggleScheme = useThemeToggle();
   const router = useRouter();
   const cart = useCart();
-  const insets = useSafeAreaInsets();
+  const insets = useContentInsets();
+  const { markOrder } = useClientVisits();
+  // When the catalog is opened from a client visit, confirming the order closes
+  // that visit as "visitado" (order placed).
+  const { clientId } = useLocalSearchParams<{ clientId?: string }>();
+  const onOrderConfirmed = clientId ? () => markOrder(clientId) : undefined;
 
   const [activeTab, setActiveTab] = useState<CatalogTabKey>('normales');
   const [query, setQuery] = useState('');
@@ -221,7 +228,7 @@ export default function CatalogScreen() {
 
       <View style={styles.listWrapper}>
         {showOrderPanel ? (
-          <OrderPanel contentPaddingBottom={insets.bottom + Spacing.three} />
+          <OrderPanel contentPaddingBottom={insets.bottom + Spacing.three} onConfirmed={onOrderConfirmed} />
         ) : (
           <>
             <FlatList
