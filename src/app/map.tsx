@@ -54,6 +54,7 @@ export default function MapScreen() {
       user: theme.accent,
       route: theme.accent,
       directions: theme.accentAlt,
+      offRoute: theme.textSecondary,
     }),
     [theme],
   );

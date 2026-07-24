@@ -31,7 +31,7 @@ export function ClientList() {
   const todayClients = useMemo(() => clients.filter((c) => c.visitToday), [clients]);
 
   const [filter, setFilter] = useState<Filter>('today');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('no-visitado');
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>('all');
   const [channelSheetVisible, setChannelSheetVisible] = useState(false);
   const [query, setQuery] = useState('');

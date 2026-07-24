@@ -85,6 +85,17 @@ export default function ClientDetailScreen() {
   const willBeWorked = activityOf(client.id).tasksDone;
   const canConfirmExit = exitReason !== null && exitPhotos.length > 0;
 
+  // Debt tones. Only meaningful when the client actually owes money — a debt-free
+  // client shows no alarm color and no due-date gradient.
+  const hasDebt = client.balance > 0;
+  const dueDateTone = !hasDebt
+    ? undefined
+    : client.daysRemaining <= 3
+      ? theme.danger // vencido o por vencer ya
+      : client.daysRemaining <= 7
+        ? theme.accentAlt // amber — atención
+        : theme.success; // verde — holgado
+
   const confirmEntry = () => {
     if (!withinRange) return;
     markEntry(client.id); // client becomes "iniciado"
@@ -168,7 +179,11 @@ export default function ClientDetailScreen() {
           <View style={[styles.hr, { backgroundColor: theme.border }]} />
 
           <View style={styles.grid}>
-            <StatTile label="Deuda total" value={`Bs ${client.balance}`} />
+            <StatTile
+              label="Deuda total"
+              value={`Bs ${client.balance}`}
+              tone={hasDebt ? theme.danger : undefined}
+            />
             <StatTile
               label="Deuda mora"
               value={`Bs ${client.overdueDebt}`}
@@ -177,7 +192,7 @@ export default function ClientDetailScreen() {
             <StatTile
               label="Días rest."
               value={client.daysRemaining > 0 ? `${client.daysRemaining} días` : 'Vencido'}
-              tone={client.daysRemaining === 0 ? theme.danger : undefined}
+              tone={dueDateTone}
             />
             <StatTile label="Últ. compra" value={client.lastPurchase} />
             <StatTile label="Ticket prom." value={`Bs ${client.avgTicket}`} />

@@ -6,6 +6,8 @@ import { ThemedText } from '@/components/themed-text';
 import { Icon, type IconName } from '@/components/ui/icon';
 import { CardShadow, ChipPadding, Radius, Spacing } from '@/constants/theme';
 import { STATUS_META, type MapClient } from '@/data/mock-clients';
+import { OffRouteBadge } from '@/components/map/off-route-badge';
+import { VisitTimer } from '@/components/map/visit-timer';
 import { mockSeller } from '@/data/mock-user';
 import { useTheme, useThemeScheme } from '@/hooks/use-theme';
 import { distanceKm, formatDistance } from '@/utils/geo';
@@ -70,6 +72,9 @@ export function ClientCard({
             </ThemedText>
           </View>
         </View>
+
+        <OffRouteBadge visitToday={client.visitToday} status={client.status} />
+        <VisitTimer clientId={client.id} status={client.status} />
 
         <MetaRow icon="person.fill" label="Propietario" value={`${client.code}-${client.owner}`} />
 
