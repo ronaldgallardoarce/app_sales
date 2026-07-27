@@ -1,8 +1,9 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useMemo, useRef, useState, type ComponentProps } from 'react';
-import { Alert, FlatList, Pressable, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { VisitTimer } from '@/components/client/visit-timer';
 import { CartSummaryBar } from '@/components/catalog/cart-bar';
 import { CategoriesSheet } from '@/components/catalog/categories-sheet';
 import { CategoryTiles } from '@/components/catalog/category-tiles';
@@ -11,10 +12,11 @@ import { OrderPanel } from '@/components/catalog/order-panel';
 import { ProductCard, PRODUCT_CARD_HEIGHT } from '@/components/catalog/product-card';
 import { ProductDetailSheet } from '@/components/product-detail/product-detail-sheet';
 import { ThemedText } from '@/components/themed-text';
+import { useDialog } from '@/components/ui/dialog';
 import { Icon } from '@/components/ui/icon';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
-import { useClientVisits } from '@/context/client-visit-context';
+import type { PaymentMethod } from '@/data/mock-incentives';
 import {
   estrategiaProducts,
   lastOrderLines,
@@ -23,8 +25,8 @@ import {
   ultimosVendidosProducts,
 } from '@/data/mock-catalog';
 import { useContentInsets } from '@/hooks/use-content-insets';
-import { useTheme, useThemeScheme, useThemeToggle } from '@/hooks/use-theme';
-import { CatalogTabKey, Product } from '@/types/catalog';
+import { useTheme } from '@/hooks/use-theme';
+import { CartLine, CatalogTabKey, Product } from '@/types/catalog';
 
 type IconName = ComponentProps<typeof Icon>['name'];
 
@@ -62,16 +64,19 @@ const TAB_LABELS: Record<CatalogTabKey, string> = {
 
 export default function CatalogScreen() {
   const theme = useTheme();
-  const scheme = useThemeScheme();
-  const toggleScheme = useThemeToggle();
   const router = useRouter();
   const cart = useCart();
+  const dialog = useDialog();
   const insets = useContentInsets();
-  const { markOrder } = useClientVisits();
-  // When the catalog is opened from a client visit, confirming the order closes
-  // that visit as "visitado" (order placed).
   const { clientId } = useLocalSearchParams<{ clientId?: string }>();
-  const onOrderConfirmed = clientId ? () => markOrder(clientId) : undefined;
+
+  // The summary screen resolves discounts and confirms the order — closing the
+  // visit belongs there, not here.
+  const goToSummary = (paymentMethod: PaymentMethod) =>
+    router.push({
+      pathname: '/order-confirm',
+      params: { ...(clientId ? { clientId } : {}), paymentMethod },
+    } as Href);
 
   const [activeTab, setActiveTab] = useState<CatalogTabKey>('normales');
   const [query, setQuery] = useState('');
@@ -79,8 +84,7 @@ export default function CatalogScreen() {
   const [categoriesVisible, setCategoriesVisible] = useState(false);
   const [showOrderPanel, setShowOrderPanel] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [hideMenu, setHideMenu] = useState(false);
-  const [hideDetail, setHideDetail] = useState(false);
+  const [editingLine, setEditingLine] = useState<CartLine | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
 
   const listRef = useRef<FlatList<Product>>(null);
@@ -126,18 +130,43 @@ export default function CatalogScreen() {
     listRef.current?.scrollToIndex({ index, animated: true });
   };
 
-  const handleDuplicate = () => {
-    cart.addLines(lastOrderLines);
-    Alert.alert('Pedido duplicado', 'Se agregaron los productos del último pedido al carrito.');
+  /** Every product the cart can hold, so a cart line can be traced back to its product. */
+  const productsById = useMemo(() => {
+    const map = new Map<string, Product>();
+    [...mockProducts, ...ultimosVendidosProducts, ...estrategiaProducts].forEach((p) => {
+      if (!map.has(p.id)) map.set(p.id, p);
+    });
+    return map;
+  }, []);
+
+  // Editing a cart line reuses the product sheet: same stepper, same equivalences.
+  const handleEditLine = (line: CartLine) => {
+    const product = productsById.get(line.productId);
+    if (!product) return;
+    setEditingLine(line);
+    setSelectedProduct(product);
   };
 
+  const closeProductSheet = () => {
+    setSelectedProduct(null);
+    setEditingLine(null);
+  };
+
+  const handleDuplicate = () => {
+    cart.addLines(lastOrderLines);
+    dialog.show({
+      icon: 'doc.on.doc',
+      tone: 'success',
+      title: 'Pedido duplicado',
+      message: 'Se agregaron los productos del último pedido al carrito.',
+    });
+  };
+
+  // Switching list always returns to the catalog: a tab press only ever changes
+  // which products are shown, never doubles as a second action.
   const handleTilePress = (key: CatalogTabKey) => {
-    if (key === activeTab) {
-      setShowOrderPanel((v) => !v);
-    } else {
-      setActiveTab(key);
-      setShowOrderPanel(false);
-    }
+    setActiveTab(key);
+    setShowOrderPanel(false);
   };
 
   return (
@@ -153,82 +182,109 @@ export default function CatalogScreen() {
 
           <View style={styles.titleColumn}>
             <ThemedText type="smallBold" style={styles.headerTitle}>
-              Opciones Cliente
+              Catálogo
             </ThemedText>
             <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
               {mockClient.code} · {mockClient.name}
             </ThemedText>
           </View>
 
-          <Pressable
-            hitSlop={8}
-            onPress={toggleScheme}
-            style={[styles.roundButton, { backgroundColor: theme.backgroundElement }]}>
-            <Icon name={scheme === 'dark' ? 'moon.fill' : 'sun.max.fill'} size={16} color={theme.text} />
-          </Pressable>
-
-          <Pressable
-            hitSlop={8}
-            onPress={() => Alert.alert('Más opciones', 'Próximamente.')}
-            style={[styles.roundButton, { backgroundColor: theme.backgroundElement }]}>
-            <Icon name="ellipsis" size={16} color={theme.text} />
-          </Pressable>
+          {/* Visit counter — same placement across every client screen */}
+          {clientId ? <VisitTimer clientId={clientId} compact /> : null}
         </View>
       </SafeAreaView>
 
       <View style={styles.controls}>
-        <View style={styles.togglesRow}>
-          <ToggleItem label="Ocultar Menú" value={hideMenu} onChange={setHideMenu} />
-          <ToggleItem label="Ocultar Detalle" value={hideDetail} onChange={setHideDetail} />
-        </View>
-
         <CategoryTiles tiles={TILES} activeKey={activeTab} onChange={handleTilePress} />
 
-        {!hideMenu ? (
-          <View style={styles.secondaryRow}>
-            <OutlineButton icon="doc.on.doc" label="Duplicar" onPress={handleDuplicate} />
-            <PrimaryButton icon="square.grid.2x2" label="Ver Categorías" onPress={() => setCategoriesVisible(true)} />
-          </View>
-        ) : null}
-
-        <View style={styles.searchRow}>
-          <View style={[styles.searchBox, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-            <Icon name="magnifyingglass" size={16} color={theme.textSecondary} />
-            <TextInput
-              value={query}
-              onChangeText={setQuery}
-              placeholder={`Buscar en Productos ${TAB_LABELS[activeTab]}`}
-              placeholderTextColor={theme.textSecondary}
-              style={[styles.searchInput, { color: theme.text }]}
+        {/* Search and list controls only describe the product list, so they step
+            aside while the order panel is what's on screen. */}
+        {showOrderPanel ? (
+          <View style={styles.metaRow}>
+            <ThemedText type="small" themeColor="textSecondary" style={styles.metaCount}>
+              Detalle del pedido
+            </ThemedText>
+            <ActionPill
+              icon="chevron.left"
+              label="Volver al catálogo"
+              onPress={() => setShowOrderPanel(false)}
             />
-            {query.length > 0 ? (
-              <Pressable hitSlop={8} onPress={() => setQuery('')}>
-                <Icon name="xmark" size={14} color={theme.textSecondary} />
-              </Pressable>
-            ) : null}
           </View>
-          <Pressable
-            onPress={() => setCategoriesVisible(true)}
-            style={[styles.filterButton, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-            <Icon name="line.3.horizontal.decrease" size={16} color={theme.text} />
-          </Pressable>
-        </View>
+        ) : (
+          <>
+            <View style={styles.searchRow}>
+              <View style={[styles.searchBox, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+                <Icon name="magnifyingglass" size={15} color={theme.textSecondary} />
+                <TextInput
+                  value={query}
+                  onChangeText={setQuery}
+                  placeholder={`Buscar en ${TAB_LABELS[activeTab]}`}
+                  placeholderTextColor={theme.textSecondary}
+                  style={[styles.searchInput, { color: theme.text }]}
+                />
+                {query.length > 0 ? (
+                  <Pressable hitSlop={8} onPress={() => setQuery('')}>
+                    <Icon name="xmark" size={13} color={theme.textSecondary} />
+                  </Pressable>
+                ) : null}
+              </View>
+              {/* Filter entry point. It carries the accent while a category is applied,
+                  so an active filter is visible even before reading the chip below. */}
+              <Pressable
+                onPress={() => setCategoriesVisible(true)}
+                style={[
+                  styles.filterButton,
+                  categoryFilter
+                    ? { backgroundColor: theme.accent, borderColor: theme.accent }
+                    : { backgroundColor: theme.backgroundElement, borderColor: theme.border },
+                ]}>
+                <Icon
+                  name="line.3.horizontal.decrease"
+                  size={15}
+                  color={categoryFilter ? theme.onAccent : theme.text}
+                />
+              </Pressable>
+            </View>
 
-        <View style={styles.sectionHeaderRow}>
-          <ThemedText type="smallBold" style={styles.sectionTitle}>
-            Productos {TAB_LABELS[activeTab]}
-          </ThemedText>
-          <Pressable
-            onPress={() => setSortAsc((v) => !v)}
-            style={[styles.sortPill, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-            <ThemedText type="smallBold">{sortAsc ? 'A-Z' : 'Z-A'}</ThemedText>
-          </Pressable>
-        </View>
+            {/* Active category — the previous design filtered with no visible trace of it. */}
+            {categoryFilter ? (
+              <View style={styles.filterChipRow}>
+                <Pressable
+                  onPress={() => setCategoryFilter(null)}
+                  style={[styles.filterChip, { backgroundColor: theme.accentSoft }]}>
+                  <ThemedText
+                    type="smallBold"
+                    numberOfLines={1}
+                    style={[styles.filterChipText, { color: theme.accent }]}>
+                    {categoryFilter}
+                  </ThemedText>
+                  <Icon name="xmark" size={11} color={theme.accent} />
+                </Pressable>
+              </View>
+            ) : null}
+
+            <View style={styles.metaRow}>
+              <ThemedText type="small" themeColor="textSecondary" style={styles.metaCount}>
+                {filtered.length} {filtered.length === 1 ? 'producto' : 'productos'}
+              </ThemedText>
+              <ActionPill icon="doc.on.doc" label="Duplicar pedido" onPress={handleDuplicate} />
+              <ActionPill
+                icon={sortAsc ? 'chevron.down' : 'chevron.up'}
+                label={sortAsc ? 'A-Z' : 'Z-A'}
+                onPress={() => setSortAsc((v) => !v)}
+              />
+            </View>
+          </>
+        )}
       </View>
 
       <View style={styles.listWrapper}>
         {showOrderPanel ? (
-          <OrderPanel contentPaddingBottom={insets.bottom + Spacing.three} onConfirmed={onOrderConfirmed} />
+          <OrderPanel
+            contentPaddingBottom={insets.bottom + Spacing.three}
+            onContinue={goToSummary}
+            onEditLine={handleEditLine}
+          />
         ) : (
           <>
             <FlatList
@@ -242,7 +298,7 @@ export default function CatalogScreen() {
               }}
               contentContainerStyle={[
                 styles.listContent,
-                { paddingBottom: (hideDetail ? 0 : CART_SUMMARY_HEIGHT) + insets.bottom + Spacing.three },
+                { paddingBottom: CART_SUMMARY_HEIGHT + insets.bottom + Spacing.three },
               ]}
               showsVerticalScrollIndicator={false}
               ListEmptyComponent={
@@ -259,12 +315,17 @@ export default function CatalogScreen() {
                 </View>
               }
             />
-            <AlphabetIndex availableLetters={availableLetters} onSelect={scrollToLetter} />
+            <AlphabetIndex
+              availableLetters={availableLetters}
+              onSelect={scrollToLetter}
+              bottomInset={CART_SUMMARY_HEIGHT + insets.bottom}
+              reversed={!sortAsc}
+            />
           </>
         )}
       </View>
 
-      {!hideDetail && !showOrderPanel ? (
+      {!showOrderPanel ? (
         <View style={[styles.cartBarWrapper, { bottom: 0, paddingBottom: insets.bottom }]}>
           <CartSummaryBar
             productCount={cart.productCount}
@@ -281,58 +342,23 @@ export default function CatalogScreen() {
         activeCategory={categoryFilter}
         onSelect={setCategoryFilter}
       />
-      <ProductDetailSheet product={selectedProduct} onClose={() => setSelectedProduct(null)} />
+      <ProductDetailSheet product={selectedProduct} onClose={closeProductSheet} editLine={editingLine} />
     </View>
   );
 }
 
-function ToggleItem({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: boolean;
-  onChange: (value: boolean) => void;
-}) {
-  const theme = useTheme();
-  return (
-    <View style={styles.toggleItem}>
-      <ThemedText type="small" numberOfLines={1} style={styles.toggleLabel}>
-        {label}
-      </ThemedText>
-      <View style={styles.switchScale}>
-        <Switch
-          value={value}
-          onValueChange={onChange}
-          trackColor={{ false: theme.backgroundSelected, true: theme.accentSoft }}
-          thumbColor={value ? theme.accent : theme.backgroundElement}
-        />
-      </View>
-    </View>
-  );
-}
-
-function OutlineButton({ icon, label, onPress }: { icon: IconName; label: string; onPress: () => void }) {
+/**
+ * Compact labelled action, built on the app's pill idiom: icon plus text so the
+ * button says what it does instead of relying on the seller decoding a glyph.
+ */
+function ActionPill({ icon, label, onPress }: { icon: IconName; label: string; onPress: () => void }) {
   const theme = useTheme();
   return (
     <Pressable
       onPress={onPress}
-      style={[styles.outlineButton, { borderColor: theme.border, backgroundColor: theme.backgroundElement }]}>
-      <Icon name={icon} size={14} color={theme.text} />
-      <ThemedText type="smallBold" style={styles.buttonLabel}>
-        {label}
-      </ThemedText>
-    </Pressable>
-  );
-}
-
-function PrimaryButton({ icon, label, onPress }: { icon: IconName; label: string; onPress: () => void }) {
-  const theme = useTheme();
-  return (
-    <Pressable onPress={onPress} style={[styles.primaryButton, { backgroundColor: theme.accent }]}>
-      <Icon name={icon} size={14} color={theme.onAccent} />
-      <ThemedText type="smallBold" style={[styles.buttonLabel, { color: theme.onAccent }]}>
+      style={[styles.actionPill, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+      <Icon name={icon} size={12} color={theme.textSecondary} />
+      <ThemedText type="smallBold" numberOfLines={1} style={styles.actionPillText}>
         {label}
       </ThemedText>
     </Pressable>
@@ -369,50 +395,6 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.two,
     gap: Spacing.two,
   },
-  togglesRow: {
-    flexDirection: 'row',
-    gap: Spacing.three,
-  },
-  toggleItem: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 6,
-  },
-  toggleLabel: {
-    flexShrink: 1,
-    fontSize: 12,
-  },
-  switchScale: {
-    transform: [{ scale: 0.8 }],
-  },
-  secondaryRow: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-  },
-  outlineButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    height: ControlHeight.input,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-  },
-  primaryButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    height: ControlHeight.input,
-    borderRadius: Radius.md,
-  },
-  buttonLabel: {
-    fontSize: 12,
-  },
   searchRow: {
     flexDirection: 'row',
     gap: Spacing.two,
@@ -429,7 +411,7 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    fontSize: 15,
+    fontSize: 14,
     paddingVertical: 0,
   },
   filterButton: {
@@ -440,27 +422,51 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sectionHeaderRow: {
+  filterChipRow: {
+    flexDirection: 'row',
+  },
+  filterChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: 5,
+    maxWidth: '100%',
+    paddingHorizontal: ChipPadding.horizontal,
+    paddingVertical: ChipPadding.vertical,
+    borderRadius: Radius.pill,
   },
-  sectionTitle: {
-    fontSize: 15,
+  filterChipText: {
+    flexShrink: 1,
+    fontSize: 11,
   },
-  sortPill: {
+  metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 6,
+  },
+  metaCount: {
+    flex: 1,
+    fontSize: 11,
+  },
+  actionPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: 5,
     paddingHorizontal: ChipPadding.horizontal,
     paddingVertical: ChipPadding.vertical,
     borderRadius: Radius.pill,
     borderWidth: 1,
   },
+  actionPillText: {
+    fontSize: 11,
+  },
   listWrapper: {
     flex: 1,
   },
   listContent: {
-    paddingHorizontal: Spacing.three,
+    // Half gutter: ProductCard adds the other half as its own padding, so rows can
+    // paint a full-bleed background while their text still lines up at Spacing.three.
+    paddingLeft: Spacing.two,
     paddingRight: Spacing.three + 20,
     paddingTop: Spacing.three,
   },

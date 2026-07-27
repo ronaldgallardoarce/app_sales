@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AccountMenu } from '@/components/account/account-menu';
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
+import { DialogProvider } from '@/components/ui/dialog';
 import { CartProvider } from '@/context/cart-context';
 import { ClientVisitProvider } from '@/context/client-visit-context';
 import { ThemeSchemeProvider, useThemeSchemeContext } from '@/context/theme-scheme-context';
@@ -55,6 +56,7 @@ function RootNavigation() {
     <ThemeProvider value={scheme === 'dark' ? DarkTheme : DefaultTheme}>
       <CartProvider>
         <ClientVisitProvider>
+        <DialogProvider>
         <AnimatedSplashOverlay />
         <Stack screenOptions={{ headerShown: false }} />
         <AccountMenu />
@@ -90,6 +92,7 @@ function RootNavigation() {
             }}
           />
         ) : null}
+        </DialogProvider>
         </ClientVisitProvider>
       </CartProvider>
     </ThemeProvider>

@@ -6,13 +6,26 @@ import { VariantChip } from '@/components/product-detail/variant-chip';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { Icon } from '@/components/ui/icon';
-import { ChipPadding, Fonts, Radius, Spacing } from '@/constants/theme';
+import { ChipPadding, ControlHeight, Fonts, Radius, Spacing } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
 import { useTheme } from '@/hooks/use-theme';
 import { CartLine, Product } from '@/types/catalog';
 import { formatBs } from '@/utils/currency';
 
-export function ProductDetailSheet({ product, onClose }: { product: Product | null; onClose: () => void }) {
+export function ProductDetailSheet({
+  product,
+  onClose,
+  editLine = null,
+}: {
+  product: Product | null;
+  onClose: () => void;
+  /**
+   * Cart line the sheet should open ready to edit. Its quantity is loaded into
+   * the stepper and the line is pulled out of the cart, so confirming re-adds it
+   * with the new amount instead of stacking a second line.
+   */
+  editLine?: CartLine | null;
+}) {
   const theme = useTheme();
   const cart = useCart();
   const [displayProduct, setDisplayProduct] = useState<Product | null>(product);
@@ -20,26 +33,45 @@ export function ProductDetailSheet({ product, onClose }: { product: Product | nu
   const [cajaQty, setCajaQty] = useState(0);
   const [unidadQty, setUnidadQty] = useState(0);
   const lastIdRef = useRef<string | null>(null);
+  const lastEditIdRef = useRef<string | null>(null);
+  /**
+   * Lines lifted out of the cart to be edited. `addLines` sums quantities for the
+   * same id, so a line has to leave the cart before its amount is re-entered —
+   * which means dismissing without confirming has to put it back, or the seller
+   * loses a line just by opening and cancelling.
+   */
+  const pulledLinesRef = useRef<CartLine[]>([]);
 
   useEffect(() => {
-    if (product) {
-      setDisplayProduct(product);
-      if (product.id !== lastIdRef.current) {
-        lastIdRef.current = product.id;
-        setSelectedIndex(0);
-        setCajaQty(0);
-        setUnidadQty(0);
-      }
+    if (!product) return;
+    setDisplayProduct(product);
+
+    if (product.id !== lastIdRef.current) {
+      lastIdRef.current = product.id;
+      setSelectedIndex(0);
+      setCajaQty(0);
+      setUnidadQty(0);
     }
-  }, [product]);
+
+    if (!editLine) {
+      lastEditIdRef.current = null;
+      return;
+    }
+    // Guard on the line id: the effect re-runs when removeLine updates the cart,
+    // and preloading twice would double the quantity.
+    if (editLine.id === lastEditIdRef.current) return;
+    lastEditIdRef.current = editLine.id;
+
+    const variantIndex = product.variants.findIndex((v) => v.sku === editLine.sku);
+    setSelectedIndex(variantIndex >= 0 ? variantIndex : 0);
+    setCajaQty(editLine.unit === 'CAJA' ? editLine.qty : 0);
+    setUnidadQty(editLine.unit === 'UNIDAD' ? editLine.qty : 0);
+    pulledLinesRef.current.push(editLine);
+    cart.removeLine(editLine.id);
+  }, [product, editLine, cart]);
 
   const hasVariants = (displayProduct?.variants.length ?? 0) > 1;
   const currentVariant = displayProduct?.variants[Math.min(selectedIndex, displayProduct.variants.length - 1)];
-
-  const variantsBySku = useMemo(
-    () => new Map((displayProduct?.variants ?? []).map((v) => [v.sku, v])),
-    [displayProduct],
-  );
 
   const existingLines = useMemo(
     () => (displayProduct ? cart.lines.filter((l) => l.productId === displayProduct.id) : []),
@@ -58,14 +90,21 @@ export function ProductDetailSheet({ product, onClose }: { product: Product | nu
 
   const buildPendingLines = (): CartLine[] => {
     if (!displayProduct || !currentVariant) return [];
+    const shared = {
+      productId: displayProduct.id,
+      productName: displayProduct.name,
+      flavor: currentVariant.flavor,
+      sku: currentVariant.sku,
+      ice: currentVariant.ice,
+      unitsPerCase: currentVariant.unitsPerCase,
+      minUnitLabel: displayProduct.minUnit ?? 'Unidad',
+      maxUnitLabel: displayProduct.maxUnit ?? 'Caja',
+    };
     const lines: CartLine[] = [];
     if (cajaQty > 0) {
       lines.push({
+        ...shared,
         id: `${currentVariant.sku}-CAJA`,
-        productId: displayProduct.id,
-        productName: displayProduct.name,
-        flavor: currentVariant.flavor,
-        sku: currentVariant.sku,
         unit: 'CAJA',
         qty: cajaQty,
         unitPrice: currentVariant.priceCaja,
@@ -73,11 +112,8 @@ export function ProductDetailSheet({ product, onClose }: { product: Product | nu
     }
     if (unidadQty > 0) {
       lines.push({
+        ...shared,
         id: `${currentVariant.sku}-UNIDAD`,
-        productId: displayProduct.id,
-        productName: displayProduct.name,
-        flavor: currentVariant.flavor,
-        sku: currentVariant.sku,
         unit: 'UNIDAD',
         qty: unidadQty,
         unitPrice: currentVariant.priceUnidad,
@@ -90,6 +126,8 @@ export function ProductDetailSheet({ product, onClose }: { product: Product | nu
     const lines = buildPendingLines();
     if (lines.length === 0) return;
     cart.addLines(lines);
+    // The pulled amounts are back in the cart — nothing left to restore.
+    pulledLinesRef.current = [];
     setCajaQty(0);
     setUnidadQty(0);
   };
@@ -110,23 +148,40 @@ export function ProductDetailSheet({ product, onClose }: { product: Product | nu
     const nextQty = line.qty + pendingSameUnit;
     if (line.unit === 'CAJA') setCajaQty(nextQty);
     else setUnidadQty(nextQty);
+    pulledLinesRef.current.push(line);
     cart.removeLine(line.id);
   };
 
   const handleAddToOrder = () => {
     commitPending();
+    // Confirming with the steppers at zero means the seller cleared the line on
+    // purpose, so it must not come back.
+    pulledLinesRef.current = [];
+    onClose();
+  };
+
+  /** Dismissal without confirming: whatever was lifted out goes back untouched. */
+  const handleDismiss = () => {
+    if (pulledLinesRef.current.length > 0) {
+      cart.addLines(pulledLinesRef.current);
+      pulledLinesRef.current = [];
+    }
     onClose();
   };
 
   if (!displayProduct || !currentVariant) return null;
 
+  // Packaging names fall back to the generic terms when a product doesn't define them.
+  const minUnitLabel = displayProduct.minUnit ?? 'Unidad';
+  const maxUnitLabel = displayProduct.maxUnit ?? 'Caja';
+
   return (
     <BottomSheet
       visible={!!product}
-      onClose={onClose}
+      onClose={handleDismiss}
       footer={
         <View style={styles.footerRow}>
-          <Pressable onPress={onClose} style={[styles.cancelButton, { borderColor: theme.border }]}>
+          <Pressable onPress={handleDismiss} style={[styles.cancelButton, { borderColor: theme.border }]}>
             <ThemedText type="smallBold">Cancelar</ThemedText>
           </Pressable>
           <Pressable
@@ -167,10 +222,11 @@ export function ProductDetailSheet({ product, onClose }: { product: Product | nu
             <InfoStat label="Utilidad" value={`${currentVariant.utilidadPct}%`} color={theme.success} />
           </View>
           <View style={[styles.infoDivider, { backgroundColor: theme.border }]} /> */}
+          {/* Reference prices per packaging level: what one of each unit costs. */}
           <View style={styles.infoBottomRow}>
             <InfoStat label="ICE" value={formatBs(currentVariant.ice)} color={theme.text} />
-            <InfoStat label="Precio mín." value={formatBs(currentVariant.priceMin)} color={theme.success} />
-            <InfoStat label="Precio máx." value={formatBs(currentVariant.priceMax)} color={theme.success} />
+            <InfoStat label="Und. mín." value={formatBs(currentVariant.priceUnidad)} color={theme.success} />
+            <InfoStat label="Und. máx." value={formatBs(currentVariant.priceCaja)} color={theme.success} />
           </View>
         </View>
 
@@ -210,7 +266,7 @@ export function ProductDetailSheet({ product, onClose }: { product: Product | nu
           </ThemedText>
           <View style={[styles.equivalencePill, { backgroundColor: theme.accentSoft }]}>
             <ThemedText style={[styles.equivalencePillText, { color: theme.accent }]}>
-              1 CAJA = {currentVariant.unitsPerCase} UNIDADES
+              1 {maxUnitLabel} = {currentVariant.unitsPerCase} {minUnitLabel}
             </ThemedText>
           </View>
         </View>
@@ -219,13 +275,8 @@ export function ProductDetailSheet({ product, onClose }: { product: Product | nu
           <ThemedText type="smallBold">
             Agregar al pedido{hasVariants ? ` · ${currentVariant.flavor}` : ''}
           </ThemedText>
-          <QuantityStepper unit="CAJA" qty={cajaQty} unitsPerCase={currentVariant.unitsPerCase} onChange={setCajaQty} />
-          <QuantityStepper
-            unit="UNIDAD"
-            qty={unidadQty}
-            unitsPerCase={currentVariant.unitsPerCase}
-            onChange={setUnidadQty}
-          />
+          <QuantityStepper unit="CAJA" unitLabel={maxUnitLabel} qty={cajaQty} onChange={setCajaQty} />
+          <QuantityStepper unit="UNIDAD" unitLabel={minUnitLabel} qty={unidadQty} onChange={setUnidadQty} />
         </View>
 
         {hasPending ? (
@@ -259,7 +310,7 @@ export function ProductDetailSheet({ product, onClose }: { product: Product | nu
             <ThemedText type="smallBold">Ya en el pedido</ThemedText>
 
             {existingLines.map((line) => {
-              const unitsPerCase = variantsBySku.get(line.sku)?.unitsPerCase ?? 1;
+              const unitsPerCase = line.unitsPerCase;
               return (
                 <View key={line.id} style={[styles.stagedRow, { backgroundColor: theme.background }]}>
                   <View style={[styles.stagedIconWrap, { backgroundColor: theme.accentSoft }]}>
@@ -270,8 +321,10 @@ export function ProductDetailSheet({ product, onClose }: { product: Product | nu
                       {displayProduct.name} · {line.flavor}
                     </ThemedText>
                     <ThemedText type="small" themeColor="textSecondary">
-                      {line.qty} {line.unit === 'CAJA' ? 'cajas' : 'unidades'}
-                      {line.unit === 'CAJA' ? ` (${line.qty * unitsPerCase} uds)` : ''}
+                      {line.qty} {line.unit === 'CAJA' ? maxUnitLabel : minUnitLabel}
+                      {line.unit === 'CAJA'
+                        ? ` (${line.qty * unitsPerCase} ${minUnitLabel.toLowerCase()})`
+                        : ''}
                     </ThemedText>
                   </View>
                   <ThemedText style={[styles.stagedPrice, { color: theme.accent }]}>
@@ -306,9 +359,9 @@ function InfoStat({ label, value, color }: { label: string; value: string; color
 
 const styles = StyleSheet.create({
   container: {
-    paddingHorizontal: Spacing.four,
-    paddingBottom: Spacing.four,
-    gap: Spacing.three,
+    paddingHorizontal: Spacing.three,
+    paddingBottom: Spacing.three,
+    gap: Spacing.two,
   },
   topRow: {
     flexDirection: 'row',
@@ -334,12 +387,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   title: {
-    fontSize: 22,
-    lineHeight: 27,
+    fontSize: 17,
+    lineHeight: 22,
   },
   infoCard: {
-    borderRadius: Radius.md,
-    padding: Spacing.three,
+    borderRadius: Radius.sm,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
     gap: Spacing.two,
   },
   infoTopRow: {
@@ -353,23 +407,24 @@ const styles = StyleSheet.create({
   },
   infoStat: {
     flex: 1,
-    gap: 4,
+    gap: 1,
   },
   infoValue: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
   variantSection: {
-    gap: Spacing.two,
+    gap: 6,
   },
   variantHeader: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: Spacing.two,
   },
   variantIconWrap: {
-    width: 30,
-    height: 30,
+    width: 26,
+    height: 26,
     borderRadius: Radius.sm,
     alignItems: 'center',
     justifyContent: 'center',
@@ -387,8 +442,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
-    borderRadius: Radius.md,
-    padding: Spacing.two,
+    borderRadius: Radius.sm,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 6,
   },
   equivalenceLabel: {
     flex: 1,
@@ -403,31 +459,32 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   addSection: {
-    gap: Spacing.two,
+    gap: 6,
   },
   summarySection: {
-    gap: Spacing.two,
+    gap: 6,
   },
   summaryCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
-    borderRadius: Radius.md,
-    padding: Spacing.three,
+    borderRadius: Radius.sm,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.two,
   },
   summaryIconWrap: {
-    width: 34,
-    height: 34,
+    width: 28,
+    height: 28,
     borderRadius: Radius.sm,
     alignItems: 'center',
     justifyContent: 'center',
   },
   summaryTexts: {
     flex: 1,
-    gap: 2,
+    gap: 1,
   },
   summaryValue: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
@@ -435,7 +492,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.one,
   },
   stagedSection: {
-    gap: Spacing.two,
+    gap: 6,
     paddingTop: Spacing.two,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
@@ -443,22 +500,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: Radius.sm,
-    paddingVertical: Spacing.two,
+    paddingVertical: 6,
     paddingHorizontal: Spacing.two,
-    gap: Spacing.two,
+    gap: 6,
   },
   stagedIconWrap: {
-    width: 28,
-    height: 28,
+    width: 24,
+    height: 24,
     borderRadius: Radius.sm,
     alignItems: 'center',
     justifyContent: 'center',
   },
   stagedTexts: {
     flex: 1,
-    gap: 2,
+    gap: 1,
   },
   stagedPrice: {
+    fontSize: 13,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
@@ -471,7 +529,7 @@ const styles = StyleSheet.create({
   },
   cancelButton: {
     flex: 1,
-    height: 40,
+    height: ControlHeight.input,
     borderRadius: Radius.md,
     borderWidth: 1,
     alignItems: 'center',
@@ -480,14 +538,14 @@ const styles = StyleSheet.create({
   addButton: {
     flex: 2,
     flexDirection: 'row',
-    height: 40,
+    height: ControlHeight.input,
     borderRadius: Radius.md,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
   },
   addButtonText: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
   },
 });

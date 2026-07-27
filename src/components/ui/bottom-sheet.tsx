@@ -83,7 +83,9 @@ export function BottomSheet({
             styles.sheet,
             {
               backgroundColor: theme.backgroundElement,
-              paddingBottom: insets.bottom + Spacing.three,
+              // insets.bottom keeps content clear of the nav bar / home indicator;
+              // only a small breathing gap is added on top of it.
+              paddingBottom: insets.bottom + Spacing.two,
               maxHeight: maxHeight ?? SCREEN_HEIGHT * 0.88,
               transform: [{ translateY }],
             },
@@ -118,7 +120,8 @@ const styles = StyleSheet.create({
   },
   handleArea: {
     alignItems: 'center',
-    paddingVertical: Spacing.two,
+    paddingTop: Spacing.two,
+    paddingBottom: 6,
   },
   handle: {
     width: 40,
@@ -130,8 +133,10 @@ const styles = StyleSheet.create({
   },
   footer: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.three,
+    // Gutters match the screen standard (Spacing.three) so the buttons line up
+    // with the content above them instead of being inset further.
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.two,
     gap: Spacing.two,
   },
 });

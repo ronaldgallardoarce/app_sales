@@ -1,10 +1,12 @@
 import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { Alert, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useState } from 'react';
+import { Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { VisitTimer } from '@/components/client/visit-timer';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
+import { useDialog } from '@/components/ui/dialog';
 import { Icon, type IconName } from '@/components/ui/icon';
 import { PhotoPicker } from '@/components/ui/photo-picker';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
@@ -22,18 +24,13 @@ type VisitStep = 'none' | 'entrada' | 'tarea' | 'remoto';
 /** Geofence radius (meters) within which the seller is allowed to check in on-site. */
 const MIN_CHECKIN_DISTANCE_M = 300;
 
-const VISIT_STEPS: { key: string; label: string; icon: IconName }[] = [
-  { key: 'entrada', label: 'Entrada', icon: 'mappin' },
-  { key: 'tarea', label: 'Tarea', icon: 'clipboard' },
-  { key: 'salida', label: 'Salida', icon: 'checkmark' },
-];
-
 export default function ClientDetailScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const dialog = useDialog();
   const insets = useContentInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { clients, activityOf, startedAtOf, startVisitTimer, markEntry, markExceptionalExit } =
+  const { clients, activityOf, startVisitTimer, markEntry, markExceptionalExit } =
     useClientVisits();
   const [visitStep, setVisitStep] = useState<VisitStep>('none');
   const [exitVisible, setExitVisible] = useState(false);
@@ -45,7 +42,7 @@ export default function ClientDetailScreen() {
   const client = clients.find((c) => c.id === id) ?? null;
 
   // Only 'no-visitado' clients still need to check in; the rest already did, so
-  // "In situ" takes them straight to the task step.
+  // "Presencial" takes them straight to the task step.
   const needsCheckIn = client?.status === 'no-visitado';
 
   const goBack = () => {
@@ -76,7 +73,13 @@ export default function ClientDetailScreen() {
 
   const state = CLIENT_STATE_META[client.clientState];
   const visit = STATUS_META[client.status];
-  const soon = () => Alert.alert('Próximamente', 'Esta opción estará disponible pronto.');
+  const soon = () =>
+    dialog.show({
+      icon: 'clock.fill',
+      tone: 'accent',
+      title: 'Próximamente',
+      message: 'Esta opción estará disponible pronto.',
+    });
 
   const distanceM = Math.round(distanceKm(mockSeller.location, client) * 1000);
   const withinRange = distanceM <= MIN_CHECKIN_DISTANCE_M;
@@ -129,12 +132,15 @@ export default function ClientDetailScreen() {
 
           <View style={styles.titleColumn}>
             <ThemedText type="smallBold" style={styles.headerTitle}>
-              {visitStep === 'none' ? 'Cliente' : visitStep === 'remoto' ? 'Pedido remoto' : 'Visita in situ'}
+              {visitStep === 'none' ? 'Cliente' : visitStep === 'remoto' ? 'Pedido remoto' : 'Visita presencial'}
             </ThemedText>
             <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
               {client.code}-{client.name}
             </ThemedText>
           </View>
+
+          {/* Visit counter lives in the header so it never displaces content */}
+          <VisitTimer clientId={client.id} compact />
 
           <Chip icon="clock.fill" label={visit.label} color={theme[visit.color]} soft={theme[visit.soft]} />
         </View>
@@ -159,20 +165,18 @@ export default function ClientDetailScreen() {
             </View>
           </View>
 
-          <View style={styles.chipsRow}>
-            <Chip icon="tag.fill" label={CHANNEL_META[client.channel].label} color={theme.textSecondary} soft={theme.backgroundSelected} />
-            <Chip icon="hand.tap" label={state.label} color={theme[state.color]} soft={theme[state.soft]} />
-            <Chip
-              icon="creditcard"
-              label={client.hasCreditLine ? 'Con crédito' : 'Sin crédito'}
-              color={client.hasCreditLine ? theme.success : theme.textSecondary}
-              soft={client.hasCreditLine ? theme.successSoft : theme.backgroundSelected}
+          <View style={styles.metaGrid}>
+            <MetaItem label="Canal" value={CHANNEL_META[client.channel].label} />
+            <MetaItem label="Estado" value={state.label} tone={theme[state.color]} />
+            <MetaItem
+              label="Línea de crédito"
+              value={client.hasCreditLine ? 'Sí' : 'No'}
+              tone={client.hasCreditLine ? theme.success : undefined}
             />
-            <Chip
-              icon="scope"
-              label={client.isPareto ? 'Pareto' : 'No Pareto'}
-              color={client.isPareto ? theme.accent : theme.textSecondary}
-              soft={client.isPareto ? theme.accentSoft : theme.backgroundSelected}
+            <MetaItem
+              label="Es Pareto"
+              value={client.isPareto ? 'Sí' : 'No'}
+              tone={client.isPareto ? theme.accent : undefined}
             />
           </View>
 
@@ -228,9 +232,6 @@ export default function ClientDetailScreen() {
 
         {visitStep === 'entrada' ? (
           <>
-            {/* Visit progress */}
-            <Stepper currentIndex={0} />
-
             {/* Distance / geofence */}
             <View style={[styles.card, styles.distanceCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
               <View style={styles.distanceTop}>
@@ -352,12 +353,6 @@ export default function ClientDetailScreen() {
           </>
         ) : visitStep === 'tarea' ? (
           <>
-            {/* Visit progress */}
-            <Stepper currentIndex={1} />
-
-            {/* Elapsed time since check-in */}
-            <VisitTimer startedAt={startedAtOf(client.id)} />
-
             {/* Primary action — the whole point of the visit: open the product catalog */}
             <Pressable
               onPress={() => router.push({ pathname: '/catalog', params: { clientId: client.id } } as Href)}
@@ -431,7 +426,7 @@ export default function ClientDetailScreen() {
             <View style={styles.optionsRow}>
               <OptionButton
                 icon="mappin"
-                label="In situ"
+                label="Presencial"
                 color="accent"
                 soft="accentSoft"
                 onPress={() => {
@@ -593,41 +588,6 @@ function withAlpha(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-/** Live-updating elapsed-time counter since the on-site visit started. */
-function VisitTimer({ startedAt }: { startedAt: number | undefined }) {
-  const theme = useTheme();
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    if (startedAt === undefined) return;
-    const interval = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, [startedAt]);
-
-  if (startedAt === undefined) return null;
-
-  const total = Math.max(0, Math.floor((now - startedAt) / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const label = h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-
-  return (
-    <View style={[styles.timerCard, { backgroundColor: theme.accentSoft, borderColor: theme.accent }]}>
-      <View style={[styles.timerIcon, { backgroundColor: theme.accent }]}>
-        <Icon name="clock.fill" size={16} color={theme.onAccent} />
-      </View>
-      <ThemedText type="small" themeColor="textSecondary" style={styles.timerLabel}>
-        Tiempo en visita
-      </ThemedText>
-      <ThemedText type="smallBold" style={[styles.timerValue, { color: theme.accent }]}>
-        {label}
-      </ThemedText>
-    </View>
-  );
-}
-
 function Chip({
   icon,
   label,
@@ -644,6 +604,23 @@ function Chip({
       <Icon name={icon} size={11} color={color} />
       <ThemedText type="smallBold" style={[styles.chipText, { color }]}>
         {label}
+      </ThemedText>
+    </View>
+  );
+}
+
+/** Client attribute as a `Label: Value` text pair — half-width cell of a 2x2 grid. */
+function MetaItem({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  return (
+    <View style={styles.metaItem}>
+      <ThemedText type="small" themeColor="textSecondary" style={styles.metaItemText}>
+        {label}:
+      </ThemedText>
+      <ThemedText
+        type="smallBold"
+        numberOfLines={1}
+        style={[styles.metaItemText, styles.metaItemValue, tone ? { color: tone } : null]}>
+        {value}
       </ThemedText>
     </View>
   );
@@ -736,32 +713,6 @@ function Divider() {
   return <View style={[styles.divider, { backgroundColor: theme.border }]} />;
 }
 
-function Stepper({ currentIndex }: { currentIndex: number }) {
-  const theme = useTheme();
-  const current = VISIT_STEPS[currentIndex];
-
-  return (
-    <View style={styles.stepper}>
-      <View style={styles.stepperHeader}>
-        <ThemedText type="small" themeColor="textSecondary">
-          Paso {currentIndex + 1} de {VISIT_STEPS.length}
-        </ThemedText>
-        <ThemedText type="smallBold" style={{ color: theme.accent }}>
-          {current.label}
-        </ThemedText>
-      </View>
-      <View style={styles.segmentsRow}>
-        {VISIT_STEPS.map((step, i) => (
-          <View
-            key={step.key}
-            style={[styles.segment, { backgroundColor: i <= currentIndex ? theme.accent : theme.backgroundSelected }]}
-          />
-        ))}
-      </View>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   root: {
     flex: 1,
@@ -828,10 +779,23 @@ const styles = StyleSheet.create({
   name: {
     fontSize: 15,
   },
-  chipsRow: {
+  metaGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 5,
+    rowGap: 4,
+  },
+  metaItem: {
+    flexBasis: '50%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingRight: Spacing.two,
+  },
+  metaItemText: {
+    fontSize: 11,
+  },
+  metaItemValue: {
+    flexShrink: 1,
   },
   chip: {
     flexDirection: 'row',
@@ -942,24 +906,6 @@ const styles = StyleSheet.create({
     height: ControlHeight.input,
     borderRadius: Radius.md,
     paddingHorizontal: Spacing.four,
-  },
-  stepper: {
-    gap: 6,
-    paddingHorizontal: 2,
-  },
-  stepperHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  segmentsRow: {
-    flexDirection: 'row',
-    gap: 5,
-  },
-  segment: {
-    flex: 1,
-    height: 5,
-    borderRadius: Radius.pill,
   },
   orderCard: {
     flexDirection: 'row',
@@ -1103,29 +1049,5 @@ const styles = StyleSheet.create({
   selectText: {
     flex: 1,
     fontSize: 14,
-  },
-  timerCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-    padding: Spacing.two,
-    paddingRight: Spacing.three,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-  },
-  timerIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: Radius.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  timerLabel: {
-    flex: 1,
-    fontSize: 13,
-  },
-  timerValue: {
-    fontSize: 18,
-    fontVariant: ['tabular-nums'],
   },
 });

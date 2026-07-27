@@ -13,11 +13,12 @@ const OPEN_THRESHOLD = 60;
  * available from every screen. Rendered once at the root, as a sibling of the
  * navigation stack — never inside a screen — so no screen has to wire it in.
  *
- * No visible trigger: swipe left from the right edge of the screen to open it,
- * like a native edge-swipe drawer. Uses react-native-gesture-handler (not the
- * plain PanResponder) because it recognizes the drag natively instead of via
- * JS touch-move polling, which is what makes edge-swipe gestures reliable —
- * plain PanResponder missed the gesture too often to be usable here.
+ * No visible trigger: swipe right from the left edge of the screen to open it,
+ * like a native edge-swipe drawer, matching the direction the sheet slides in.
+ * Uses react-native-gesture-handler (not the plain PanResponder) because it
+ * recognizes the drag natively instead of via JS touch-move polling, which is
+ * what makes edge-swipe gestures reliable — plain PanResponder missed the
+ * gesture too often to be usable here.
  */
 export function AccountMenu() {
   const [visible, setVisible] = useState(false);
@@ -25,10 +26,10 @@ export function AccountMenu() {
   const openSheet = () => setVisible(true);
 
   const swipeGesture = Gesture.Pan()
-    .activeOffsetX(-10)
+    .activeOffsetX(10)
     .failOffsetY([-15, 15])
     .onEnd((event) => {
-      if (event.translationX < -OPEN_THRESHOLD) {
+      if (event.translationX > OPEN_THRESHOLD) {
         runOnJS(openSheet)();
       }
     });
@@ -46,7 +47,7 @@ export function AccountMenu() {
 const styles = StyleSheet.create({
   edgeZone: {
     position: 'absolute',
-    right: 0,
+    left: 0,
     top: 0,
     bottom: 0,
     width: EDGE_WIDTH,

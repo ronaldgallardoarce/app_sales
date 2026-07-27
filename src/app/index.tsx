@@ -39,7 +39,7 @@ export default function HomeScreen() {
             <View style={[styles.channelBadge, { backgroundColor: theme.accentSoft }]}>
               <Icon name="tag.fill" size={10} color={theme.accent} />
               <ThemedText type="small" style={[styles.channelBadgeText, { color: theme.accent }]} numberOfLines={1}>
-                {CHANNEL_META[mockSeller.channel].label}
+                {mockSeller.channels.map((c) => CHANNEL_META[c].label).join(' · ')}
               </ThemedText>
             </View>
           </View>

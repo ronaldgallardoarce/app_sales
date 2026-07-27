@@ -25,11 +25,15 @@ function formatDuration(ms: number): string {
  * Shows the visit duration for a client: a live counter while the visit is
  * "iniciado", or the final elapsed time once the seller has checked out.
  * Renders nothing when there is no timing data for the client.
+ *
+ * `compact` drops the icon and caption so the timer fits a screen header row
+ * without competing with the title.
  */
-export function VisitTimer({ clientId, status }: { clientId: string; status: VisitStatus }) {
+export function VisitTimer({ clientId, compact = false }: { clientId: string; compact?: boolean }) {
   const theme = useTheme();
-  const { startedAtOf, endedAtOf } = useClientVisits();
+  const { statusOf, startedAtOf, endedAtOf } = useClientVisits();
 
+  const status = statusOf(clientId);
   const startedAt = startedAtOf(clientId);
   const endedAt = endedAtOf(clientId);
   const live = status === 'iniciado' && startedAt != null;
@@ -41,36 +45,34 @@ export function VisitTimer({ clientId, status }: { clientId: string; status: Vis
     return () => clearInterval(id);
   }, [live]);
 
-  if (live) {
-    const elapsed = now - (startedAt as number);
+  const isTerminal = TERMINAL_STATUSES.includes(status) && startedAt != null && endedAt != null;
+  if (!live && !isTerminal) return null;
+
+  const duration = live ? now - (startedAt as number) : (endedAt as number) - (startedAt as number);
+  const tone = live ? theme.accentAlt : theme.textSecondary;
+  const soft = live ? theme.accentAltSoft : theme.backgroundSelected;
+
+  if (compact) {
     return (
-      <View style={[styles.chip, { backgroundColor: theme.accentAltSoft }]}>
-        <Icon name="clock.fill" size={13} color={theme.accentAlt} />
-        <ThemedText type="small" style={[styles.label, { color: theme.accentAlt }]}>
-          En visita
-        </ThemedText>
-        <ThemedText type="smallBold" style={[styles.value, { color: theme.accentAlt }]}>
-          {formatDuration(elapsed)}
+      <View style={[styles.compactChip, { backgroundColor: soft }]}>
+        <ThemedText type="smallBold" style={[styles.compactValue, { color: tone }]}>
+          {formatDuration(duration)}
         </ThemedText>
       </View>
     );
   }
 
-  if (TERMINAL_STATUSES.includes(status) && startedAt != null && endedAt != null) {
-    return (
-      <View style={[styles.chip, { backgroundColor: theme.backgroundSelected }]}>
-        <Icon name="clock.fill" size={13} color={theme.textSecondary} />
-        <ThemedText type="small" style={[styles.label, { color: theme.textSecondary }]}>
-          Duración
-        </ThemedText>
-        <ThemedText type="smallBold" style={[styles.value, { color: theme.text }]}>
-          {formatDuration(endedAt - startedAt)}
-        </ThemedText>
-      </View>
-    );
-  }
-
-  return null;
+  return (
+    <View style={[styles.chip, { backgroundColor: soft }]}>
+      <Icon name="clock.fill" size={13} color={tone} />
+      <ThemedText type="small" style={[styles.label, { color: tone }]}>
+        {live ? 'En visita' : 'Duración'}
+      </ThemedText>
+      <ThemedText type="smallBold" style={[styles.value, { color: live ? tone : theme.text }]}>
+        {formatDuration(duration)}
+      </ThemedText>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -88,6 +90,15 @@ const styles = StyleSheet.create({
   },
   value: {
     fontSize: 12,
+    fontVariant: ['tabular-nums'],
+  },
+  compactChip: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: Radius.pill,
+  },
+  compactValue: {
+    fontSize: 11,
     fontVariant: ['tabular-nums'],
   },
 });

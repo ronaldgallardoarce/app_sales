@@ -1,5 +1,6 @@
 import type { ThemeColor } from '@/constants/theme';
 import type { IconName } from '@/components/ui/icon';
+import type { MapClient, SalesChannel } from '@/data/mock-clients';
 
 /**
  * How the seller is expected to answer a task. The response type drives which
@@ -19,14 +20,30 @@ export type TaskColor = 'accent' | 'violet' | 'accentAlt' | 'success' | 'danger'
 export type ChecklistItem = { id: string; label: string };
 
 /**
+ * Which clients a task reaches. Modelled as a discriminated union so the three
+ * cases stay mutually exclusive by construction — there is no way to express a
+ * task that is both channel-wide and client-specific, and adding a fourth scope
+ * later breaks compilation everywhere it must be handled.
+ *
+ * - `general`: every client the seller visits.
+ * - `canal`: only clients of that sales channel. A seller working several
+ *   channels sees the task on the matching clients and nowhere else.
+ * - `cliente`: a single client.
+ */
+export type TaskScope =
+  | { kind: 'general' }
+  | { kind: 'canal'; channel: SalesChannel }
+  | { kind: 'cliente'; clientId: string };
+
+/**
  * A task defined by the supervisor and surfaced per client in the seller app.
  * This is the domain model — the screen only reads it. When a real backend is
  * wired in, this is the shape the API should return.
  */
 export type SupervisorTask = {
   id: string;
-  /** Client this task targets. `null` means it applies to every client. */
-  clientId: string | null;
+  /** Which clients this task reaches. */
+  scope: TaskScope;
   title: string;
   description: string;
   color: TaskColor;
@@ -79,10 +96,10 @@ export const TASK_COLOR_META: Record<TaskColor, { color: ThemeColor; soft: Theme
 
 // Tasks that apply to every client — one per response type so any client shows
 // the full range of task kinds.
-const allClientTasks: SupervisorTask[] = [
+const generalTasks: SupervisorTask[] = [
   {
     id: 't-photo-shelf',
-    clientId: null,
+    scope: { kind: 'general' },
     title: 'Foto de exhibición en góndola',
     description: 'Capturá la exhibición actual de nuestros productos en el punto de venta.',
     color: 'accent',
@@ -93,7 +110,7 @@ const allClientTasks: SupervisorTask[] = [
   },
   {
     id: 't-checklist-visibility',
-    clientId: null,
+    scope: { kind: 'general' },
     title: 'Checklist de visibilidad',
     description: 'Verificá los materiales de punto de venta instalados en el local.',
     color: 'violet',
@@ -109,7 +126,7 @@ const allClientTasks: SupervisorTask[] = [
   },
   {
     id: 't-text-notes',
-    clientId: null,
+    scope: { kind: 'general' },
     title: 'Observaciones de la visita',
     description: 'Registrá cualquier comentario relevante del cliente o del punto de venta.',
     color: 'success',
@@ -118,7 +135,7 @@ const allClientTasks: SupervisorTask[] = [
   },
   {
     id: 't-rating-service',
-    clientId: null,
+    scope: { kind: 'general' },
     title: 'Calificación de atención',
     description: 'Calificá la experiencia general de atención en el punto de venta.',
     color: 'accentAlt',
@@ -128,11 +145,52 @@ const allClientTasks: SupervisorTask[] = [
   },
 ];
 
+// Tasks scoped to a sales channel: they only reach clients of that channel, so a
+// seller working several channels gets a different set on each of their clients.
+const channelTasks: SupervisorTask[] = [
+  {
+    id: 't-chan-trad-price',
+    scope: { kind: 'canal', channel: 'tradicional' },
+    title: 'Relevamiento de precios en mostrador',
+    description: 'Registrá los precios de venta al público exhibidos en el mostrador.',
+    color: 'accent',
+    responseType: 'texto',
+    priority: 'normal',
+    required: true,
+    dueDate: 'Hoy',
+  },
+  {
+    id: 't-chan-pan-freshness',
+    scope: { kind: 'canal', channel: 'panificacion' },
+    title: 'Control de frescura de producto',
+    description: 'Verificá fechas de vencimiento y rotación del producto en el local.',
+    color: 'success',
+    responseType: 'checklist',
+    priority: 'alta',
+    required: true,
+    checklist: [
+      { id: 'ck-pan-1', label: 'Sin producto vencido en exhibición' },
+      { id: 'ck-pan-2', label: 'Rotación FIFO aplicada' },
+      { id: 'ck-pan-3', label: 'Producto almacenado en seco' },
+    ],
+  },
+  {
+    id: 't-chan-horiz-planogram',
+    scope: { kind: 'canal', channel: 'horizontal' },
+    title: 'Cumplimiento de planograma',
+    description: 'Comparás la góndola contra el planograma acordado y registrás desvíos.',
+    color: 'violet',
+    responseType: 'foto',
+    priority: 'alta',
+    required: false,
+  },
+];
+
 // Extra tasks targeted at specific clients, on top of the shared ones above.
 const perClientTasks: SupervisorTask[] = [
   {
     id: 't-urgent-debt',
-    clientId: 'c-540902',
+    scope: { kind: 'cliente', clientId: 'c-540902' },
     title: 'Gestionar deuda en mora',
     description: 'Conversá con el cliente sobre el saldo vencido y registrá el compromiso de pago.',
     color: 'danger',
@@ -143,7 +201,7 @@ const perClientTasks: SupervisorTask[] = [
   },
   {
     id: 't-new-client-photo',
-    clientId: 'c-778112',
+    scope: { kind: 'cliente', clientId: 'c-778112' },
     title: 'Foto de fachada del local',
     description: 'Cliente nuevo: registrá una foto de la fachada para el alta comercial.',
     color: 'violet',
@@ -154,15 +212,34 @@ const perClientTasks: SupervisorTask[] = [
   },
 ];
 
-const tasks: SupervisorTask[] = [...allClientTasks, ...perClientTasks];
+const tasks: SupervisorTask[] = [...generalTasks, ...channelTasks, ...perClientTasks];
+
+/** The client fields task resolution depends on — nothing else is needed. */
+type TaskClient = Pick<MapClient, 'id' | 'channel'>;
+
+/** Whether a task's scope reaches this client. */
+function scopeReaches(scope: TaskScope, client: TaskClient): boolean {
+  switch (scope.kind) {
+    case 'general':
+      return true;
+    case 'canal':
+      return scope.channel === client.channel;
+    case 'cliente':
+      return scope.clientId === client.id;
+  }
+}
 
 /**
- * Tasks the seller sees for a given client: the ones targeted at that client
- * plus every task that applies to all clients, ordered by priority.
+ * Tasks the seller sees for a given client: general ones, the ones for that
+ * client's sales channel, and the ones targeted at the client itself.
+ *
+ * Resolution keys off the *client's* channel, never the seller's: a seller
+ * responsible for several channels then sees each channel's tasks only on the
+ * clients that belong to it, with no extra filtering.
  */
-export function tasksForClient(clientId: string): SupervisorTask[] {
+export function tasksForClient(client: TaskClient): SupervisorTask[] {
   return tasks
-    .filter((t) => t.clientId === null || t.clientId === clientId)
+    .filter((t) => scopeReaches(t.scope, client))
     .sort((a, b) => {
       const pa = a.priority ? PRIORITY_WEIGHT[a.priority] : 4;
       const pb = b.priority ? PRIORITY_WEIGHT[b.priority] : 4;

@@ -1,16 +1,22 @@
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useState } from 'react';
-import { Alert, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
-import { Overlay, Radius, Spacing } from '@/constants/theme';
+import { ControlHeight, Overlay, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 /**
  * Reusable photo capture + gallery picker with in-place preview. Used for task
  * photo responses and for exceptional-exit evidence.
+ *
+ * Camera and gallery are two separate buttons, and permission problems are shown
+ * inline rather than in a dialog — deliberately. This component renders inside
+ * bottom sheets, which are `Modal`s: a dialog raised from the app root would be
+ * presented *below* the open sheet and never become visible. Everything it needs
+ * to show has to live in its own view tree.
  */
 export function PhotoPicker({
   uris,
@@ -23,15 +29,17 @@ export function PhotoPicker({
 }) {
   const theme = useTheme();
   const [preview, setPreview] = useState<string | null>(null);
+  const [permissionNotice, setPermissionNotice] = useState<string | null>(null);
   const remaining = max - uris.length;
 
   const addUris = (added: string[]) => onChange([...uris, ...added].slice(0, max));
   const removeAt = (index: number) => onChange(uris.filter((_, i) => i !== index));
 
   const takePhoto = async () => {
+    setPermissionNotice(null);
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert('Permiso necesario', 'Habilitá el acceso a la cámara para tomar fotos.');
+      setPermissionNotice('Habilitá el acceso a la cámara para tomar fotos.');
       return;
     }
     const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.7 });
@@ -39,9 +47,10 @@ export function PhotoPicker({
   };
 
   const pickFromGallery = async () => {
+    setPermissionNotice(null);
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert('Permiso necesario', 'Habilitá el acceso a la galería para adjuntar fotos.');
+      setPermissionNotice('Habilitá el acceso a la galería para adjuntar fotos.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -51,15 +60,6 @@ export function PhotoPicker({
       quality: 0.7,
     });
     if (!result.canceled) addUris(result.assets.map((a) => a.uri));
-  };
-
-  const showOptions = () => {
-    if (remaining <= 0) return;
-    Alert.alert('Agregar foto', 'Elegí de dónde tomar la imagen', [
-      { text: 'Tomar foto', onPress: takePhoto },
-      { text: 'Elegir de galería', onPress: pickFromGallery },
-      { text: 'Cancelar', style: 'cancel' },
-    ]);
   };
 
   return (
@@ -77,19 +77,39 @@ export function PhotoPicker({
           </Pressable>
         ))}
 
-        {remaining > 0 ? (
-          <Pressable
-            onPress={showOptions}
-            style={[styles.add, { borderColor: theme.border, backgroundColor: theme.background }]}>
-            <Icon name="camera" size={22} color={theme.accent} />
-            <ThemedText type="small" style={{ color: theme.accent }}>
-              Agregar
-            </ThemedText>
-          </Pressable>
-        ) : null}
       </View>
 
-      <ThemedText type="small" themeColor="textSecondary">
+      {/* Two direct buttons instead of a chooser: one tap less, and no second modal
+          that a bottom sheet would hide. */}
+      {remaining > 0 ? (
+        <View style={styles.sourceRow}>
+          <Pressable
+            onPress={takePhoto}
+            style={[styles.sourceButton, { borderColor: theme.border, backgroundColor: theme.background }]}>
+            <Icon name="camera" size={15} color={theme.accent} />
+            <ThemedText type="smallBold" style={[styles.sourceLabel, { color: theme.accent }]}>
+              Cámara
+            </ThemedText>
+          </Pressable>
+          <Pressable
+            onPress={pickFromGallery}
+            style={[styles.sourceButton, { borderColor: theme.border, backgroundColor: theme.background }]}>
+            <Icon name="photo" size={15} color={theme.accent} />
+            <ThemedText type="smallBold" style={[styles.sourceLabel, { color: theme.accent }]}>
+              Galería
+            </ThemedText>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {permissionNotice ? (
+        <View style={[styles.notice, { backgroundColor: theme.dangerSoft }]}>
+          <Icon name="exclamationmark.circle" size={13} color={theme.danger} />
+          <ThemedText style={[styles.noticeText, { color: theme.danger }]}>{permissionNotice}</ThemedText>
+        </View>
+      ) : null}
+
+      <ThemedText type="small" themeColor="textSecondary" style={styles.hint}>
         {uris.length}/{max} fotos · tocá una para ampliarla
       </ThemedText>
 
@@ -136,15 +156,39 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  add: {
-    width: 90,
-    height: 90,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderStyle: 'dashed',
+  sourceRow: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+  },
+  sourceButton: {
+    flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
+    gap: 6,
+    height: ControlHeight.input - 4,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+  },
+  sourceLabel: {
+    fontSize: 12,
+  },
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 6,
+    borderRadius: Radius.sm,
+  },
+  noticeText: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  hint: {
+    fontSize: 11,
   },
   backdrop: {
     flex: 1,

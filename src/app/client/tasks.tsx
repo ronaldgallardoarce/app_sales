@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { VisitTimer } from '@/components/client/visit-timer';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { Icon, type IconName } from '@/components/ui/icon';
@@ -11,7 +12,7 @@ import { PhotoPicker } from '@/components/ui/photo-picker';
 import { CardShadow, ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { mapClients } from '@/data/mock-clients';
 import {
-  PRIORITY_META,
+  // PRIORITY_META — re-add when the priority chips below are uncommented.
   RESPONSE_META,
   TASK_COLOR_META,
   tasksForClient,
@@ -62,7 +63,7 @@ export default function ClientTasksScreen() {
   const { markTasksDone } = useClientVisits();
 
   const client = mapClients.find((c) => c.id === id) ?? null;
-  const tasks = useMemo(() => (client ? tasksForClient(client.id) : []), [client]);
+  const tasks = useMemo(() => (client ? tasksForClient(client) : []), [client]);
 
   const [statuses, setStatuses] = useState<Record<string, TaskStatus>>({});
   const [filter, setFilter] = useState<Filter>('todas');
@@ -136,6 +137,9 @@ export default function ClientTasksScreen() {
             </ThemedText>
           </View>
 
+          {/* Visit counter — same placement across every client screen */}
+          <VisitTimer clientId={client.id} compact />
+
           <View style={[styles.countChip, { backgroundColor: theme.backgroundElement }]}>
             <ThemedText type="smallBold" style={{ color: theme.accent }}>
               {done}/{total}
@@ -150,14 +154,9 @@ export default function ClientTasksScreen() {
         {/* Progress summary */}
         <View style={[styles.summaryCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
           <View style={styles.summaryTop}>
-            <View style={styles.summaryText}>
-              <ThemedText type="small" themeColor="textSecondary">
-                Progreso de tareas
-              </ThemedText>
-              <ThemedText type="smallBold" style={styles.summaryValue}>
-                {done} de {total} completadas
-              </ThemedText>
-            </View>
+            <ThemedText type="smallBold" style={styles.summaryValue}>
+              {done} de {total} completadas
+            </ThemedText>
             <ThemedText type="smallBold" style={{ color: pct === 100 ? theme.success : theme.accent }}>
               {pct}%
             </ThemedText>
@@ -172,22 +171,20 @@ export default function ClientTasksScreen() {
             />
           </View>
 
-          {requiredPending > 0 ? (
-            <View style={[styles.reqBanner, { backgroundColor: theme.dangerSoft }]}>
-              <Icon name="exclamationmark.circle" size={14} color={theme.danger} />
-              <ThemedText type="smallBold" style={[styles.reqBannerText, { color: theme.danger }]}>
-                {requiredPending} obligatoria{requiredPending > 1 ? 's' : ''} pendiente
-                {requiredPending > 1 ? 's' : ''}
-              </ThemedText>
-            </View>
-          ) : (
-            <View style={[styles.reqBanner, { backgroundColor: theme.successSoft }]}>
-              <Icon name="checkmark.circle.fill" size={14} color={theme.success} />
-              <ThemedText type="smallBold" style={[styles.reqBannerText, { color: theme.success }]}>
-                Sin obligatorias pendientes
-              </ThemedText>
-            </View>
-          )}
+          <View style={styles.reqRow}>
+            <Icon
+              name={requiredPending > 0 ? 'exclamationmark.circle' : 'checkmark.circle.fill'}
+              size={12}
+              color={requiredPending > 0 ? theme.danger : theme.success}
+            />
+            <ThemedText
+              type="smallBold"
+              style={[styles.reqRowText, { color: requiredPending > 0 ? theme.danger : theme.success }]}>
+              {requiredPending > 0
+                ? `${requiredPending} obligatoria${requiredPending > 1 ? 's' : ''} pendiente${requiredPending > 1 ? 's' : ''}`
+                : 'Sin obligatorias pendientes'}
+            </ThemedText>
+          </View>
         </View>
 
         {/* Filters */}
@@ -317,6 +314,8 @@ function TaskCard({
 
         <View style={styles.chipsRow}>
           <Chip icon={response.icon} label={response.label} color={theme.textSecondary} soft={theme.backgroundSelected} />
+          {/* Priority is hidden for now — the attribute stays in the domain model
+              (SupervisorTask.priority) so re-enabling it is just uncommenting this.
           {task.priority ? (
             <Chip
               icon="flag.fill"
@@ -325,6 +324,7 @@ function TaskCard({
               soft={theme[PRIORITY_META[task.priority].soft]}
             />
           ) : null}
+          */}
           {task.required ? (
             <Chip icon="exclamationmark.circle" label="Obligatoria" color={theme.danger} soft={theme.dangerSoft} />
           ) : null}
@@ -375,6 +375,7 @@ function TaskSheet({
       </View>
 
       <View style={styles.chipsRow}>
+        {/* Priority is hidden for now — see the matching note in TaskCard.
         {task.priority ? (
           <Chip
             icon="flag.fill"
@@ -383,6 +384,7 @@ function TaskSheet({
             soft={theme[PRIORITY_META[task.priority].soft]}
           />
         ) : null}
+        */}
         {task.required ? (
           <Chip icon="exclamationmark.circle" label="Obligatoria" color={theme.danger} soft={theme.dangerSoft} />
         ) : null}
@@ -607,42 +609,36 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   summaryCard: {
-    borderRadius: Radius.lg,
+    borderRadius: Radius.md,
     borderWidth: 1,
-    padding: Spacing.three,
-    gap: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+    gap: 6,
   },
   summaryTop: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  summaryText: {
-    gap: 1,
-  },
   summaryValue: {
-    fontSize: 16,
+    fontSize: 13,
   },
   progressTrack: {
-    height: 8,
+    height: 5,
     borderRadius: Radius.pill,
     overflow: 'hidden',
   },
   progressFill: {
-    height: 8,
+    height: 5,
     borderRadius: Radius.pill,
   },
-  reqBanner: {
+  reqRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: Spacing.two,
-    paddingVertical: 6,
-    borderRadius: Radius.md,
-    marginTop: 2,
+    gap: 5,
   },
-  reqBannerText: {
-    fontSize: 12,
+  reqRowText: {
+    fontSize: 11,
   },
   segmented: {
     flexDirection: 'row',

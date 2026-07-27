@@ -30,7 +30,7 @@ export function AccountSheet({ visible, onClose }: { visible: boolean; onClose: 
           </View>
           <View style={[styles.channelBadge, { backgroundColor: theme.accentSoft }]}>
             <ThemedText type="small" style={{ color: theme.accent }} numberOfLines={1}>
-              {CHANNEL_META[mockSeller.channel].label}
+              {mockSeller.channels.map((c) => CHANNEL_META[c].label).join(' · ')}
             </ThemedText>
           </View>
         </View>

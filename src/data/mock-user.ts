@@ -6,8 +6,8 @@ export type Seller = {
   zone: string;
   route: string;
   lastSync: string;
-  /** Sales channel this seller is responsible for. */
-  channel: SalesChannel;
+  /** Sales channels this seller is responsible for — at least one. */
+  channels: SalesChannel[];
   /** Mock current location, used to compute distances to clients. */
   location: { lat: number; lng: number };
 };
@@ -18,6 +18,6 @@ export const mockSeller: Seller = {
   zone: 'Equipetrol · Santa Cruz de la Sierra',
   route: 'Ruta 12',
   lastSync: 'hace 2 h',
-  channel: 'tradicional',
+  channels: ['tradicional'],
   location: { lat: -17.7683, lng: -63.1812 },
 };

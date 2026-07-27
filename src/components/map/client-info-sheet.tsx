@@ -6,7 +6,7 @@ import { Icon, type IconName } from '@/components/ui/icon';
 import { ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { CHANNEL_META, STATUS_META, type MapClient } from '@/data/mock-clients';
 import { OffRouteBadge } from '@/components/map/off-route-badge';
-import { VisitTimer } from '@/components/map/visit-timer';
+import { VisitTimer } from '@/components/client/visit-timer';
 import { useTheme } from '@/hooks/use-theme';
 
 export function ClientInfoSheet({
@@ -81,7 +81,7 @@ export function ClientInfoSheet({
           </View>
 
           <OffRouteBadge visitToday={client.visitToday} status={client.status} />
-          <VisitTimer clientId={client.id} status={client.status} />
+          <VisitTimer clientId={client.id} />
 
           <View style={[styles.infoCard, { backgroundColor: theme.background }]}>
             <InfoRow icon="person.fill" label="Cliente" value={client.name} />
