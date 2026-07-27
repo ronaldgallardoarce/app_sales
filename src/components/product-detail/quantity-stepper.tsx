@@ -9,13 +9,14 @@ import { UnitCode } from '@/types/catalog';
 
 export function QuantityStepper({
   unit,
+  unitLabel,
   qty,
-  unitsPerCase,
   onChange,
 }: {
   unit: UnitCode;
+  /** This product's name for the unit, e.g. "Caja" or "Botella". */
+  unitLabel: string;
   qty: number;
-  unitsPerCase: number;
   onChange: (qty: number) => void;
 }) {
   const theme = useTheme();
@@ -26,7 +27,6 @@ export function QuantityStepper({
   useEffect(() => {
     setText(String(qty));
   }, [qty]);
-  const totalUnits = isCaja ? qty * unitsPerCase : qty;
 
   const commit = (value: string) => {
     const parsed = Math.max(0, Math.floor(Number(value.replace(/[^0-9]/g, '')) || 0));
@@ -41,9 +41,11 @@ export function QuantityStepper({
       </View>
 
       <View style={styles.labelCol}>
-        <ThemedText type="smallBold">{isCaja ? 'Cajas' : 'Unidades sueltas'}</ThemedText>
-        <ThemedText themeColor="textSecondary" type="small" numberOfLines={1}>
-          {isCaja ? `1 CAJA = ${unitsPerCase} UNIDADES` : 'UNIDAD'}
+        <ThemedText type="smallBold" numberOfLines={1}>
+          {unitLabel}
+        </ThemedText>
+        <ThemedText themeColor="textSecondary" style={styles.roleLabel} numberOfLines={1}>
+          {isCaja ? 'Unidad máxima' : 'Unidad mínima'}
         </ThemedText>
       </View>
 
@@ -79,10 +81,6 @@ export function QuantityStepper({
           <Icon name="plus" size={14} color={theme.accent} />
         </Pressable>
       </View>
-
-      {/* <ThemedText themeColor="textSecondary" type="small" style={styles.equivalence}>
-        = {totalUnits} uds
-      </ThemedText> */}
     </View>
   );
 }
@@ -91,46 +89,48 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: Radius.md,
-    padding: Spacing.three,
+    borderRadius: Radius.sm,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 6,
     gap: Spacing.two,
   },
   iconWrap: {
-    width: 34,
-    height: 34,
+    width: 28,
+    height: 28,
     borderRadius: Radius.sm,
     alignItems: 'center',
     justifyContent: 'center',
   },
   labelCol: {
-    width: 100,
-    gap: 2,
+    // Takes the slack instead of a fixed width, so the stepper lands on the right
+    // edge rather than leaving dead space beside it.
+    flex: 1,
+    gap: 1,
+  },
+  roleLabel: {
+    fontSize: 11,
   },
   stepper: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
   },
   stepButton: {
-    width: 28,
-    height: 28,
+    width: 26,
+    height: 26,
     borderRadius: Radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
   },
   input: {
-    width: 40,
-    height: 28,
+    width: 42,
+    height: 26,
     borderRadius: Radius.sm,
     borderWidth: 1,
     textAlign: 'center',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
     paddingVertical: 0,
-  },
-  equivalence: {
-    flex: 1,
-    textAlign: 'right',
   },
 });

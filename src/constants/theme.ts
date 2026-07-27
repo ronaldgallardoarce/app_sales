@@ -136,3 +136,10 @@ export const ChipPadding = {
 
 export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
 export const MaxContentWidth = 800;
+
+/**
+ * Toggle for the Android auto-hide nav bar experiment (buttons hidden, swipe
+ * to reveal). Off for now so the system back/home/recent buttons stay
+ * visible — flip to true to bring immersive mode back.
+ */
+export const AndroidImmersiveNavBar = false;

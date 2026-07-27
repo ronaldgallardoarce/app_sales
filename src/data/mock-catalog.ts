@@ -33,27 +33,34 @@ function single(
   sku: string,
   priceUnidad: number,
   unitsPerCase: number,
-  opts: Partial<Pick<ProductVariant, 'ice' | 'utilidadPct'>> & { inStock?: boolean } = {},
+  opts: Partial<Pick<ProductVariant, 'ice' | 'utilidadPct'>> & {
+    inStock?: boolean;
+    minUnit?: string;
+    maxUnit?: string;
+  } = {},
 ): Product {
-  const { inStock = true, ...variantOpts } = opts;
+  const { inStock = true, minUnit, maxUnit, ...variantOpts } = opts;
   return {
     id,
     name,
     family,
     inStock,
+    minUnit,
+    maxUnit,
     variants: [makeVariant(sku, priceUnidad, unitsPerCase, variantOpts)],
   };
 }
 
 export const mockProducts: Product[] = [
-  single('p-aceite-oliva', 'ACEITE DE OLIVA 500ML', 'ACEITES', 'AC-0142', 24.5, 12, { utilidadPct: 22 }),
-  single('p-arroz-extra', 'ARROZ EXTRA 1KG', 'ABARROTES', 'AR-0033', 8.5, 20, { utilidadPct: 18 }),
-  single('p-azucar-blanca', 'AZUCAR BLANCA 1KG', 'ABARROTES', 'AZ-0011', 7.2, 20, { utilidadPct: 15 }),
+  single('p-aceite-oliva', 'ACEITE DE OLIVA 500ML', 'ACEITES', 'AC-0142', 24.5, 12, { utilidadPct: 22, minUnit: 'Botella' }),
+  single('p-arroz-extra', 'ARROZ EXTRA 1KG', 'ABARROTES', 'AR-0033', 8.5, 20, { utilidadPct: 18, minUnit: 'Bolsa' }),
+  single('p-azucar-blanca', 'AZUCAR BLANCA 1KG', 'ABARROTES', 'AZ-0011', 7.2, 20, { utilidadPct: 15, minUnit: 'Bolsa' }),
   {
     id: 'p-bebida-energ',
     name: 'BEBIDA ENERGIZANTE 250ML',
     family: 'BEBIDAS',
     inStock: true,
+    minUnit: 'Lata',
     variants: [
       makeVariant('BE-0087-OR', 6.0, 24, { flavor: 'Original', colorDot: '#3C8CE8', ice: 0.3, utilidadPct: 30 }),
       makeVariant('BE-0087-SA', 6.0, 24, { flavor: 'Sin Azúcar', colorDot: '#5FB4A2', ice: 0.3, utilidadPct: 30 }),
@@ -67,6 +74,7 @@ export const mockProducts: Product[] = [
     name: 'GALLETA DULCE SURTIDA',
     family: 'GALLETAS',
     inStock: true,
+    minUnit: 'Paquete',
     variants: [
       makeVariant('GL-0061-CH', 4.2, 12, { flavor: 'Chocolate', colorDot: '#6B4423', utilidadPct: 26 }),
       makeVariant('GL-0061-VA', 4.2, 12, { flavor: 'Vainilla', colorDot: '#E4D3A5', utilidadPct: 26 }),
@@ -78,6 +86,7 @@ export const mockProducts: Product[] = [
     name: 'GELATINA 85 G',
     family: 'GELATINAS',
     inStock: true,
+    minUnit: 'Sobre',
     variants: [
       makeVariant('GE-0210-FR', 3.5, 12, { flavor: 'Frutilla', colorDot: '#E0526B', utilidadPct: 28 }),
       makeVariant('GE-0210-PI', 3.5, 12, { flavor: 'Piña', colorDot: '#E3B23C', utilidadPct: 28 }),
@@ -100,6 +109,7 @@ export const mockProducts: Product[] = [
     name: 'REFRESCO EN POLVO 25G',
     family: 'BEBIDAS',
     inStock: true,
+    minUnit: 'Sobre',
     variants: [
       makeVariant('RF-0301-FR', 1.5, 24, { flavor: 'Frutilla', colorDot: '#E0526B', utilidadPct: 32 }),
       makeVariant('RF-0301-PI', 1.5, 24, { flavor: 'Piña', colorDot: '#E3B23C', utilidadPct: 32 }),
@@ -153,7 +163,8 @@ export const ultimosVendidosProducts = ultimosVendidosIds.map((id) => byId.get(i
 export const estrategiaProducts = estrategiaIds.map((id) => byId.get(id)!);
 
 export const lastOrderLines: CartLine[] = [
-  { id: 'AR-0033-CAJA', productId: 'p-arroz-extra', productName: 'ARROZ EXTRA 1KG', sku: 'AR-0033', unit: 'CAJA', qty: 1, unitPrice: 170 },
-  { id: 'LE-0005-CAJA', productId: 'p-leche-entera', productName: 'LECHE ENTERA 1L', sku: 'LE-0005', unit: 'CAJA', qty: 2, unitPrice: 94.8 },
-  { id: 'GE-0210-FR-UNIDAD', productId: 'p-gelatina', productName: 'GELATINA 85 G', flavor: 'Frutilla', sku: 'GE-0210-FR', unit: 'UNIDAD', qty: 6, unitPrice: 3.5 },
+  { id: 'AR-0033-CAJA', productId: 'p-arroz-extra', productName: 'ARROZ EXTRA 1KG', sku: 'AR-0033', unit: 'CAJA', minUnitLabel: 'Bolsa', maxUnitLabel: 'Caja', qty: 1, unitPrice: 170, ice: 0, unitsPerCase: 20 },
+  { id: 'AR-0033-UNIDAD', productId: 'p-arroz-extra', productName: 'ARROZ EXTRA 1KG', sku: 'AR-0033', unit: 'UNIDAD', minUnitLabel: 'Bolsa', maxUnitLabel: 'Caja', qty: 4, unitPrice: 8.5, ice: 0, unitsPerCase: 20 },
+  { id: 'LE-0005-CAJA', productId: 'p-leche-entera', productName: 'LECHE ENTERA 1L', sku: 'LE-0005', unit: 'CAJA', minUnitLabel: 'Botella', maxUnitLabel: 'Caja', qty: 2, unitPrice: 94.8, ice: 0, unitsPerCase: 12 },
+  { id: 'GE-0210-FR-UNIDAD', productId: 'p-gelatina', productName: 'GELATINA 85 G', flavor: 'Frutilla', sku: 'GE-0210-FR', unit: 'UNIDAD', minUnitLabel: 'Sobre', maxUnitLabel: 'Caja', qty: 6, unitPrice: 3.5, ice: 0, unitsPerCase: 12 },
 ];

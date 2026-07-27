@@ -16,6 +16,7 @@ type MapColors = {
   user: string;
   route: string;
   directions: string;
+  offRoute: string;
 };
 
 function buildHtml(
@@ -32,7 +33,14 @@ function buildHtml(
   directionsLegs: LatLng[][] | null,
   pickMode: boolean,
 ): string {
-  const markers = clients.map((c) => ({ id: c.id, lat: c.lat, lng: c.lng, status: c.status }));
+  const markers = clients.map((c) => ({
+    id: c.id,
+    lat: c.lat,
+    lng: c.lng,
+    status: c.status,
+    // Clients not on today's planned route get a dashed pin outline.
+    offRoute: !c.visitToday,
+  }));
 
   return `<!DOCTYPE html>
 <html>
@@ -66,6 +74,7 @@ function buildHtml(
     var USER_COLOR = ${JSON.stringify(colors.user)};
     var ROUTE_COLOR = ${JSON.stringify(colors.route)};
     var DIRECTIONS_COLOR = ${JSON.stringify(colors.directions)};
+    var OFFROUTE_COLOR = ${JSON.stringify(colors.offRoute)};
     var USER = ${JSON.stringify(userLocation)};
     var DEFAULT = ${JSON.stringify(DEFAULT_CENTER)};
     var ROUTE_START = ${JSON.stringify(routeStart)};
@@ -105,6 +114,28 @@ function buildHtml(
         : '<circle cx="14" cy="14" r="5.5" fill="#ffffff"/>';
       var svg = '<svg width="28" height="38" viewBox="0 0 28 38" xmlns="http://www.w3.org/2000/svg">'
         + '<path d="M14 0C6.27 0 0 6.27 0 14c0 10.5 14 24 14 24s14-13.5 14-24C28 6.27 21.73 0 14 0z" fill="' + color + '" stroke="#ffffff" stroke-width="2.5"/>'
+        + center + '</svg>';
+      return L.divIcon({
+        html: svg,
+        className: 'pin-icon',
+        iconSize: [28, 38],
+        iconAnchor: [14, 38],
+        popupAnchor: [0, -34]
+      });
+    }
+
+    // Off-route clients keep the exact same status-colored teardrop, but their
+    // outline gets a slate (secondary) dashed stroke painted over the white edge:
+    // it reads as "one of the others, not a priority" — visible, yet never louder
+    // than the on-route pins and never like a different owner's pin.
+    var PIN_PATH = 'M14 0C6.27 0 0 6.27 0 14c0 10.5 14 24 14 24s14-13.5 14-24C28 6.27 21.73 0 14 0z';
+    function offRoutePinIcon(color, label, dashColor) {
+      var center = label
+        ? '<circle cx="14" cy="14" r="8.5" fill="#ffffff"/><text x="14" y="18" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="700" fill="' + color + '">' + label + '</text>'
+        : '<circle cx="14" cy="14" r="5.5" fill="#ffffff"/>';
+      var svg = '<svg width="28" height="38" viewBox="0 0 28 38" xmlns="http://www.w3.org/2000/svg">'
+        + '<path d="' + PIN_PATH + '" fill="' + color + '" stroke="#ffffff" stroke-width="2.5"/>'
+        + '<path d="' + PIN_PATH + '" fill="none" stroke="' + dashColor + '" stroke-width="2" stroke-dasharray="3 2.6"/>'
         + center + '</svg>';
       return L.divIcon({
         html: svg,
@@ -190,7 +221,8 @@ function buildHtml(
     CLIENTS.forEach(function (c) {
       var color = STATUS_COLORS[c.status] || '#888888';
       var label = ORDER[c.id] ? String(ORDER[c.id]) : '';
-      var marker = L.marker([c.lat, c.lng], { icon: pinIcon(color, label) });
+      var icon = c.offRoute ? offRoutePinIcon(color, label, OFFROUTE_COLOR) : pinIcon(color, label);
+      var marker = L.marker([c.lat, c.lng], { icon: icon });
       marker.on('click', function () {
         if (!window.ReactNativeWebView) return;
         // While picking a route start point, tapping a client sets it as that

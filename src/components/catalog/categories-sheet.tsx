@@ -3,9 +3,8 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { Icon } from '@/components/ui/icon';
 import { ThemedText } from '@/components/themed-text';
-import { getCategoryColor } from '@/constants/category-colors';
 import { Radius, Spacing } from '@/constants/theme';
-import { useTheme, useThemeScheme } from '@/hooks/use-theme';
+import { useTheme } from '@/hooks/use-theme';
 
 export function CategoriesSheet({
   visible,
@@ -20,14 +19,11 @@ export function CategoriesSheet({
   activeCategory: string | null;
   onSelect: (category: string | null) => void;
 }) {
-  const theme = useTheme();
-  const scheme = useThemeScheme();
-
   return (
-    <BottomSheet visible={visible} onClose={onClose} maxHeight={520}>
+    <BottomSheet visible={visible} onClose={onClose} maxHeight={460}>
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         <ThemedText type="smallBold" style={styles.title}>
-          Ver Categorías
+          Categorías
         </ThemedText>
 
         <Row
@@ -45,7 +41,6 @@ export function CategoriesSheet({
             label={category.name}
             count={category.count}
             active={activeCategory === category.name}
-            dotColor={getCategoryColor(category.name, scheme, theme.textSecondary)}
             onPress={() => {
               onSelect(category.name);
               onClose();
@@ -62,66 +57,66 @@ function Row({
   count,
   active,
   onPress,
-  dotColor,
 }: {
   label: string;
   count: number;
   active: boolean;
   onPress: () => void;
-  dotColor?: string;
 }) {
   const theme = useTheme();
   return (
     <Pressable
       onPress={onPress}
-      style={[styles.row, { backgroundColor: active ? theme.accentSoft : theme.background }]}>
-      <View style={styles.rowLeft}>
-        {dotColor ? <View style={[styles.dot, { backgroundColor: dotColor }]} /> : null}
-        <ThemedText themeColor={active ? undefined : 'text'} style={active ? { color: theme.accent, fontWeight: '700' } : undefined}>
-          {label}
-        </ThemedText>
-      </View>
-      <View style={styles.rowRight}>
-        <ThemedText themeColor="textSecondary" type="small">
+      style={[styles.row, active ? { backgroundColor: theme.accentSoft } : null]}>
+      <ThemedText
+        type="smallBold"
+        numberOfLines={1}
+        style={[styles.label, active ? { color: theme.accent } : null]}>
+        {label}
+      </ThemedText>
+      <View style={[styles.countPill, { backgroundColor: active ? 'transparent' : theme.backgroundSelected }]}>
+        <ThemedText style={[styles.countText, { color: active ? theme.accent : theme.textSecondary }]}>
           {count}
         </ThemedText>
-        {active ? <Icon name="checkmark" size={16} color={theme.accent} /> : null}
       </View>
+      {active ? <Icon name="checkmark" size={13} color={theme.accent} /> : null}
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    paddingHorizontal: Spacing.four,
-    paddingBottom: Spacing.four,
-    gap: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingBottom: Spacing.three,
+    gap: 2,
   },
   title: {
-    fontSize: 18,
-    marginBottom: Spacing.two,
+    fontSize: 15,
+    marginBottom: 6,
+    paddingHorizontal: Spacing.two,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: Spacing.three,
-    paddingHorizontal: Spacing.three,
-    borderRadius: Radius.md,
-  },
-  rowLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: Spacing.two,
+    paddingVertical: Spacing.two,
+    paddingHorizontal: Spacing.two,
+    borderRadius: Radius.sm,
   },
-  dot: {
-    width: 10,
-    height: 10,
+  label: {
+    flex: 1,
+    fontSize: 13,
+  },
+  countPill: {
+    minWidth: 22,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
     borderRadius: Radius.pill,
-  },
-  rowRight: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.two,
+  },
+  countText: {
+    fontSize: 11,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
 });

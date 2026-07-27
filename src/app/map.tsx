@@ -1,7 +1,7 @@
 import { useRouter, type Href } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ChannelSheet } from '@/components/map/channel-sheet';
 import { ClientInfoSheet } from '@/components/map/client-info-sheet';
@@ -15,7 +15,6 @@ import { ChipPadding, ControlHeight, FloatingShadow, Radius, Spacing } from '@/c
 import {
   CHANNEL_META,
   CHANNEL_ORDER,
-  mapClients,
   routeBlocks,
   STATUS_META,
   STATUS_ORDER,
@@ -23,7 +22,9 @@ import {
   type SalesChannel,
   type VisitStatus,
 } from '@/data/mock-clients';
+import { useClientVisits } from '@/context/client-visit-context';
 import { mockSeller } from '@/data/mock-user';
+import { useContentInsets } from '@/hooks/use-content-insets';
 import { useTheme } from '@/hooks/use-theme';
 import { convexHull } from '@/utils/geo';
 import { resolveOptimalRoute, type LatLng, type TravelMode } from '@/utils/routing';
@@ -37,9 +38,10 @@ type RouteOriginMode = 'current' | 'custom';
 export default function MapScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const insets = useContentInsets();
+  const { clients } = useClientVisits();
 
-  const todayClients = useMemo(() => mapClients.filter((c) => c.visitToday), []);
+  const todayClients = useMemo(() => clients.filter((c) => c.visitToday), [clients]);
   const boundsPolygon = useMemo(() => convexHull(routeBlocks.flat()), []);
   const colors = useMemo(
     () => ({
@@ -52,6 +54,7 @@ export default function MapScreen() {
       user: theme.accent,
       route: theme.accent,
       directions: theme.accentAlt,
+      offRoute: theme.textSecondary,
     }),
     [theme],
   );
@@ -78,7 +81,7 @@ export default function MapScreen() {
   const [directionsTargetId, setDirectionsTargetId] = useState<string | null>(null);
 
   const baseClients =
-    filter === 'today' ? (todayClients.length > 0 ? todayClients : mapClients) : mapClients;
+    filter === 'today' ? (todayClients.length > 0 ? todayClients : clients) : clients;
 
   const channelCounts = useMemo(() => {
     const counts = {} as Record<SalesChannel, number>;
@@ -167,6 +170,15 @@ export default function MapScreen() {
           <ThemedText type="smallBold" style={styles.headerTitle} numberOfLines={1}>
             {viewMode === 'map' ? 'Mapa de ruta' : 'Clientes'}
           </ThemedText>
+
+          {viewMode === 'map' ? (
+            <View style={[styles.countBadge, { backgroundColor: theme.backgroundElement }]}>
+              <Icon name="person.2.fill" size={13} color={theme.accent} />
+              <ThemedText type="smallBold" style={styles.countBadgeText}>
+                {displayedClients.length}
+              </ThemedText>
+            </View>
+          ) : null}
 
           <View style={[styles.viewToggle, { backgroundColor: theme.backgroundElement }]}>
             <ViewToggleButton icon="map" active={viewMode === 'map'} onPress={() => setViewMode('map')} />
@@ -267,7 +279,7 @@ export default function MapScreen() {
                 directionsLegs={directionsLegs}
                 pickMode={pickingStart}
                 onSelect={(id) => {
-                  const client = mapClients.find((c) => c.id === id);
+                  const client = clients.find((c) => c.id === id);
                   if (client) setSelectedClient(client);
                 }}
                 onPickPoint={(point) => {
@@ -344,9 +356,9 @@ export default function MapScreen() {
           <ClientInfoSheet
             client={selectedClient}
             onClose={() => setSelectedClient(null)}
-            onViewClient={() => {
+            onViewClient={(c) => {
               setSelectedClient(null);
-              router.push('/catalog' as Href);
+              router.push(`/client/${c.id}` as Href);
             }}
             directionsAvailable={routeMode && !!selectedClient && routeOrder[selectedClient.id] !== undefined}
             directionsActive={selectedClient !== null && directionsTargetId === selectedClient.id}
@@ -514,6 +526,17 @@ const styles = StyleSheet.create({
   headerTitle: {
     flex: 1,
     fontSize: 18,
+  },
+  countBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    height: ControlHeight.segment,
+    paddingHorizontal: Spacing.two,
+    borderRadius: Radius.pill,
+  },
+  countBadgeText: {
+    fontSize: 13,
   },
   viewToggle: {
     flexDirection: 'row',

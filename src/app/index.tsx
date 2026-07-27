@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
@@ -9,6 +9,7 @@ import { CardShadow, Radius, Spacing } from '@/constants/theme';
 import { CHANNEL_META } from '@/data/mock-clients';
 import { menuOptions, type MenuOption } from '@/data/menu-options';
 import { mockSeller } from '@/data/mock-user';
+import { useContentInsets } from '@/hooks/use-content-insets';
 import { useTheme, useThemeScheme, useThemeToggle } from '@/hooks/use-theme';
 
 export default function HomeScreen() {
@@ -16,7 +17,7 @@ export default function HomeScreen() {
   const scheme = useThemeScheme();
   const toggleScheme = useThemeToggle();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const insets = useContentInsets();
 
   const [offline, setOffline] = useState(false);
 
@@ -38,7 +39,7 @@ export default function HomeScreen() {
             <View style={[styles.channelBadge, { backgroundColor: theme.accentSoft }]}>
               <Icon name="tag.fill" size={10} color={theme.accent} />
               <ThemedText type="small" style={[styles.channelBadgeText, { color: theme.accent }]} numberOfLines={1}>
-                {CHANNEL_META[mockSeller.channel].label}
+                {mockSeller.channels.map((c) => CHANNEL_META[c].label).join(' · ')}
               </ThemedText>
             </View>
           </View>

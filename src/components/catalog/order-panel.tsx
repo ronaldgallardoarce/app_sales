@@ -1,213 +1,234 @@
-import { useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
+import { useDialog } from '@/components/ui/dialog';
 import { Icon } from '@/components/ui/icon';
 import { ThemedText } from '@/components/themed-text';
 import { ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
+import { PAYMENT_METHODS, type PaymentMethod } from '@/data/mock-incentives';
 import { useTheme } from '@/hooks/use-theme';
+import type { CartLine } from '@/types/catalog';
+import { groupIntoItems, unitLabelOf } from '@/utils/order';
 import { formatBs } from '@/utils/currency';
 
-const PAYMENT_METHODS = ['Efectivo', 'Tarjeta', 'Transferencia', 'Crédito'] as const;
-const DISCOUNTS = [0, 5, 10, 15] as const;
-
-export function OrderPanel({ contentPaddingBottom }: { contentPaddingBottom: number }) {
+export function OrderPanel({
+  contentPaddingBottom,
+  onContinue,
+  onEditLine,
+}: {
+  contentPaddingBottom: number;
+  /**
+   * Move on to the order summary, where incentives are calculated and the order is
+   * confirmed. The chosen payment terms travel with it because they drive the
+   * discount.
+   */
+  onContinue?: (paymentMethod: PaymentMethod) => void;
+  /** Tapping a line asks the screen to reopen the product sheet to edit it. */
+  onEditLine?: (line: CartLine) => void;
+}) {
   const theme = useTheme();
-  const { lines, removeLine, setLineQty, clearCart, totalAmount } = useCart();
-  const [paymentMethod, setPaymentMethod] = useState<(typeof PAYMENT_METHODS)[number]>('Efectivo');
-  const [discountPct, setDiscountPct] = useState<(typeof DISCOUNTS)[number]>(0);
-  const [bonification, setBonification] = useState('');
+  const dialog = useDialog();
+  const { lines, removeLine, totalAmount } = useCart();
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Contado');
 
-  const discountAmount = (totalAmount * discountPct) / 100;
-  const finalTotal = totalAmount - discountAmount;
+  const items = useMemo(() => groupIntoItems(lines), [lines]);
 
   const handleSavePreorder = () => {
-    Alert.alert('Prepedido guardado', 'El pedido quedó guardado como borrador. Podrás retomarlo más tarde.');
-  };
-
-  const handleConfirm = () => {
-    Alert.alert('Pedido confirmado', `Se registró el pedido por ${formatBs(finalTotal)}.`, [
-      { text: 'OK', onPress: clearCart },
-    ]);
+    dialog.show({
+      icon: 'tray.and.arrow.down',
+      tone: 'accent',
+      title: 'Prepedido guardado',
+      message: 'El pedido quedó guardado como borrador. Podrás retomarlo más tarde.',
+    });
   };
 
   return (
     <ScrollView
       contentContainerStyle={[styles.container, { paddingBottom: contentPaddingBottom }]}
       showsVerticalScrollIndicator={false}>
-      <ThemedText type="smallBold" style={styles.title}>
-        Tu Pedido
-      </ThemedText>
-
+      {/* No title here — the screen's control row above already labels the panel. */}
       {lines.length === 0 ? (
         <ThemedText themeColor="textSecondary" style={styles.empty}>
           Aún no agregaste productos.
         </ThemedText>
       ) : (
-        lines.map((line) => (
-          <View key={line.id} style={[styles.line, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-            <View style={styles.lineInfo}>
-              <ThemedText type="smallBold" numberOfLines={1}>
-                {line.productName}
-                {line.flavor ? ` · ${line.flavor}` : ''}
+        items.map((item) => (
+          // The whole row opens the product sheet, where quantities are edited with
+          // the same stepper used to add them — no separate decrement button here.
+          <Pressable
+            key={item.sku}
+            onPress={() => onEditLine?.(item.lines[0])}
+            style={[styles.line, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+            <View style={styles.lineTop}>
+              <ThemedText type="smallBold" numberOfLines={1} style={styles.lineName}>
+                {item.productName}
+                {item.flavor ? ` · ${item.flavor}` : ''}
               </ThemedText>
-              <ThemedText themeColor="textSecondary" type="small">
-                {line.qty} {line.unit} · {formatBs(line.unitPrice)} c/u
+              <ThemedText style={[styles.lineSubtotal, { color: theme.success }]} numberOfLines={1}>
+                {formatBs(item.subtotal)}
               </ThemedText>
-            </View>
-            <View style={styles.lineRight}>
-              <ThemedText style={styles.lineSubtotal}>{formatBs(line.qty * line.unitPrice)}</ThemedText>
               <Pressable
                 hitSlop={8}
-                onPress={() => setLineQty(line.id, line.qty - 1)}
-                style={[styles.iconButton, { backgroundColor: theme.backgroundSelected }]}>
-                <Icon name="minus" size={13} color={theme.textSecondary} />
-              </Pressable>
-              <Pressable
-                hitSlop={8}
-                onPress={() => removeLine(line.id)}
-                style={[styles.iconButton, { backgroundColor: theme.backgroundSelected }]}>
-                <Icon name="trash" size={13} color={theme.danger} />
+                onPress={() => item.lines.forEach((line) => removeLine(line.id))}
+                style={[styles.iconButton, { backgroundColor: theme.dangerSoft }]}>
+                <Icon name="trash" size={14} color={theme.danger} />
               </Pressable>
             </View>
-          </View>
+
+            {/* One quantity per unit type, each with the price it was priced at. */}
+            {item.lines.map((line) => (
+              <View key={line.id} style={styles.qtyRow}>
+                <ThemedText type="smallBold" style={styles.qtyText}>
+                  {line.qty} {unitLabelOf(line)}
+                </ThemedText>
+                <ThemedText themeColor="textSecondary" style={styles.qtyText}>
+                  × {formatBs(line.unitPrice)}
+                </ThemedText>
+                <ThemedText themeColor="textSecondary" style={[styles.qtyText, styles.qtyAmount]}>
+                  {formatBs(line.qty * line.unitPrice)}
+                </ThemedText>
+              </View>
+            ))}
+
+            <ThemedText themeColor="textSecondary" style={styles.lineMeta}>
+              ICE {formatBs(item.ice)}
+            </ThemedText>
+          </Pressable>
         ))
       )}
 
+      {/* Totals sit directly under the cart: the running subtotal belongs to the
+          list of products, not to the payment terms chosen further down. */}
+      <View style={[styles.totalsSection, { borderTopColor: theme.border }]}>
+        <View style={styles.totalRow}>
+          <ThemedText themeColor="textSecondary" type="small">
+            Productos
+          </ThemedText>
+          <ThemedText type="small">{items.length}</ThemedText>
+        </View>
+        <View style={[styles.grandTotalRow, { borderTopColor: theme.border }]}>
+          <ThemedText type="smallBold" style={styles.grandTotalLabel}>
+            Subtotal
+          </ThemedText>
+          <ThemedText style={[styles.totalValue, { color: theme.success }]}>{formatBs(totalAmount)}</ThemedText>
+        </View>
+      </View>
+
       <View style={[styles.section, { borderTopColor: theme.border }]}>
         <ThemedText type="smallBold">Método de pago</ThemedText>
-        <View style={styles.chipsRow}>
+        <View style={[styles.segment, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
           {PAYMENT_METHODS.map((method) => {
             const active = method === paymentMethod;
             return (
               <Pressable
                 key={method}
                 onPress={() => setPaymentMethod(method)}
-                style={[
-                  styles.chip,
-                  { backgroundColor: active ? theme.accent : theme.backgroundElement, borderColor: active ? theme.accent : theme.border },
-                ]}>
-                <ThemedText style={[styles.chipText, { color: active ? theme.onAccent : theme.text }]}>
+                style={[styles.segmentButton, active ? { backgroundColor: theme.accent } : null]}>
+                <ThemedText
+                  type="smallBold"
+                  numberOfLines={1}
+                  style={[styles.segmentText, { color: active ? theme.onAccent : theme.textSecondary }]}>
                   {method}
                 </ThemedText>
               </Pressable>
             );
           })}
         </View>
-      </View>
 
-      <View style={[styles.section, { borderTopColor: theme.border }]}>
-        <ThemedText type="smallBold">Descuentos y bonificaciones</ThemedText>
-        <View style={styles.chipsRow}>
-          {DISCOUNTS.map((pct) => {
-            const active = pct === discountPct;
-            return (
-              <Pressable
-                key={pct}
-                onPress={() => setDiscountPct(pct)}
-                style={[
-                  styles.chip,
-                  { backgroundColor: active ? theme.accent : theme.backgroundElement, borderColor: active ? theme.accent : theme.border },
-                ]}>
-                <ThemedText style={[styles.chipText, { color: active ? theme.onAccent : theme.text }]}>
-                  {pct === 0 ? 'Sin descuento' : `${pct}%`}
-                </ThemedText>
-              </Pressable>
-            );
-          })}
-        </View>
-        <TextInput
-          value={bonification}
-          onChangeText={setBonification}
-          placeholder="Bonificación (ej: 2 unidades gratis)"
-          placeholderTextColor={theme.textSecondary}
-          style={[styles.bonusInput, { color: theme.text, borderColor: theme.border, backgroundColor: theme.backgroundElement }]}
-        />
-      </View>
-
-      <View style={[styles.totalsSection, { borderTopColor: theme.border }]}>
-        <View style={styles.totalRow}>
-          <ThemedText themeColor="textSecondary" type="small">
-            Subtotal
-          </ThemedText>
-          <ThemedText type="small">{formatBs(totalAmount)}</ThemedText>
-        </View>
-        {discountPct > 0 ? (
-          <View style={styles.totalRow}>
-            <ThemedText themeColor="textSecondary" type="small">
-              Descuento ({discountPct}%)
-            </ThemedText>
-            <ThemedText type="small" style={{ color: theme.danger }}>
-              -{formatBs(discountAmount)}
+        {paymentMethod === 'Pronto pago' ? (
+          <View style={[styles.notice, { backgroundColor: theme.accentAltSoft }]}>
+            <Icon name="exclamationmark.circle" size={14} color={theme.accentAlt} />
+            <ThemedText style={[styles.noticeText, { color: theme.accentAlt }]}>
+              Pronto pago aplica un descuento especial. El producto no se descarga hasta recibir el
+              pago del cliente.
             </ThemedText>
           </View>
         ) : null}
-        <View style={styles.totalRow}>
-          <ThemedText type="smallBold">Total</ThemedText>
-          <ThemedText style={styles.totalValue}>{formatBs(finalTotal)}</ThemedText>
-        </View>
       </View>
 
-      <View style={styles.footerButtons}>
-        <Pressable
-          onPress={handleSavePreorder}
-          style={[styles.outlineButton, { borderColor: theme.border, backgroundColor: theme.backgroundElement }]}>
-          <Icon name="tray.and.arrow.down" size={15} color={theme.text} />
-          <ThemedText type="smallBold" style={styles.buttonLabel}>
-            Guardar Prepedido
-          </ThemedText>
-        </Pressable>
-        <Pressable
-          disabled={lines.length === 0}
-          onPress={handleConfirm}
-          style={[styles.confirmButton, { backgroundColor: theme.success, opacity: lines.length === 0 ? 0.4 : 1 }]}>
-          <Icon name="cart" size={15} color={theme.onSuccess} />
-          <ThemedText type="smallBold" style={[styles.buttonLabel, { color: theme.onSuccess }]}>
-            Confirmar Pedido
-          </ThemedText>
-        </Pressable>
-      </View>
+      {/* Discounts are resolved on the summary screen, which is also where the order
+          is confirmed — nothing here commits the order. */}
+      <Pressable
+        disabled={lines.length === 0}
+        onPress={() => onContinue?.(paymentMethod)}
+        style={[
+          styles.continueButton,
+          { backgroundColor: theme.accent, opacity: lines.length === 0 ? 0.4 : 1 },
+        ]}>
+        <Icon name="cash" size={15} color={theme.onAccent} />
+        <ThemedText type="smallBold" style={[styles.buttonLabel, { color: theme.onAccent }]}>
+          Aplicar descuentos y bonificaciones
+        </ThemedText>
+        <Icon name="chevron.right" size={15} color={theme.onAccent} />
+      </Pressable>
+
+      <Pressable
+        onPress={handleSavePreorder}
+        style={[styles.outlineButton, { borderColor: theme.border, backgroundColor: theme.backgroundElement }]}>
+        <Icon name="tray.and.arrow.down" size={15} color={theme.text} />
+        <ThemedText type="smallBold" style={styles.buttonLabel}>
+          Guardar prepedido
+        </ThemedText>
+      </Pressable>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
+    // Matches the product list's gutters so the panel lines up with the rest of
+    // the screen instead of running to the edges.
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.three,
     gap: Spacing.two,
-  },
-  title: {
-    fontSize: 16,
-    marginBottom: Spacing.one,
   },
   empty: {
     paddingVertical: Spacing.five,
     textAlign: 'center',
   },
   line: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: Radius.md,
+    borderRadius: Radius.sm,
     borderWidth: 1,
-    padding: Spacing.three,
-    gap: Spacing.two,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    gap: 1,
   },
-  lineInfo: {
-    flex: 1,
-    gap: 3,
-  },
-  lineRight: {
+  lineTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.two,
+    gap: 6,
+  },
+  lineName: {
+    flex: 1,
+    fontSize: 12,
+  },
+  lineMeta: {
+    fontSize: 10,
   },
   lineSubtotal: {
+    fontSize: 12,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
-    marginRight: 4,
+  },
+  qtyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  qtyText: {
+    fontSize: 10,
+    fontVariant: ['tabular-nums'],
+  },
+  qtyAmount: {
+    flex: 1,
+    textAlign: 'right',
+    // Clears the trash button so amounts line up under the subtotal above.
+    marginRight: 26 + 6,
   },
   iconButton: {
-    width: 28,
-    height: 28,
+    width: 26,
+    height: 26,
     borderRadius: Radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
@@ -217,28 +238,44 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.three,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  chipsRow: {
+  segment: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.two,
-  },
-  chip: {
-    paddingHorizontal: Spacing.two,
-    paddingVertical: 6,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
-  },
-  chipText: {
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '700',
-  },
-  bonusInput: {
-    height: ControlHeight.input,
     borderRadius: Radius.md,
     borderWidth: 1,
-    paddingHorizontal: Spacing.three,
-    fontSize: 14,
+    padding: 3,
+    gap: 3,
+  },
+  segmentButton: {
+    flex: 1,
+    height: ControlHeight.segment,
+    borderRadius: Radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  segmentText: {
+    fontSize: 12,
+  },
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    padding: Spacing.two,
+    borderRadius: Radius.sm,
+  },
+  noticeText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '600',
+  },
+  continueButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: ControlHeight.input,
+    borderRadius: Radius.md,
+    marginTop: Spacing.two,
   },
   totalsSection: {
     gap: 6,
@@ -249,6 +286,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  grandTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 2,
+    paddingTop: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  grandTotalLabel: {
+    fontSize: 14,
   },
   totalValue: {
     fontSize: 18,

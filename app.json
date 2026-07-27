@@ -17,8 +17,7 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false,
-      "edgeToEdgeEnabled": false
+      "predictiveBackGestureEnabled": false
     },
     "web": {
       "output": "static",
@@ -32,6 +31,13 @@
           "backgroundColor": "#208AEF",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "La app usa tus fotos para adjuntar evidencia a las tareas de visita.",
+          "cameraPermission": "La app usa la cámara para tomar fotos de evidencia en las tareas de visita."
         }
       ]
     ],

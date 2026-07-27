@@ -1,50 +1,55 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { runOnJS } from 'react-native-reanimated';
 
 import { AccountSheet } from '@/components/account/account-sheet';
-import { Icon } from '@/components/ui/icon';
-import { FloatingShadow, Radius } from '@/constants/theme';
-import { useTheme } from '@/hooks/use-theme';
+
+const EDGE_WIDTH = 32;
+const OPEN_THRESHOLD = 60;
 
 /**
  * Global entry point to view the seller's profile and switch light/dark theme,
  * available from every screen. Rendered once at the root, as a sibling of the
  * navigation stack — never inside a screen — so no screen has to wire it in.
  *
- * Anchored to the vertical middle of the right edge: every screen's own header
- * lives in the top band and (on catalog) a summary bar lives in the bottom band,
- * so this is the one spot that stays clear across the whole app.
+ * No visible trigger: swipe right from the left edge of the screen to open it,
+ * like a native edge-swipe drawer, matching the direction the sheet slides in.
+ * Uses react-native-gesture-handler (not the plain PanResponder) because it
+ * recognizes the drag natively instead of via JS touch-move polling, which is
+ * what makes edge-swipe gestures reliable — plain PanResponder missed the
+ * gesture too often to be usable here.
  */
 export function AccountMenu() {
-  const theme = useTheme();
   const [visible, setVisible] = useState(false);
+
+  const openSheet = () => setVisible(true);
+
+  const swipeGesture = Gesture.Pan()
+    .activeOffsetX(10)
+    .failOffsetY([-15, 15])
+    .onEnd((event) => {
+      if (event.translationX > OPEN_THRESHOLD) {
+        runOnJS(openSheet)();
+      }
+    });
 
   return (
     <>
-      <Pressable
-        hitSlop={8}
-        onPress={() => setVisible(true)}
-        style={[styles.button, FloatingShadow, { backgroundColor: theme.backgroundElement }]}>
-        <Icon name="person.crop.circle" size={20} color={theme.accent} />
-      </Pressable>
-
+      <GestureDetector gesture={swipeGesture}>
+        <View style={styles.edgeZone} />
+      </GestureDetector>
       <AccountSheet visible={visible} onClose={() => setVisible(false)} />
     </>
   );
 }
 
 const styles = StyleSheet.create({
-  button: {
+  edgeZone: {
     position: 'absolute',
-    right: 6,
-    top: '50%',
-    marginTop: -20,
-    width: 40,
-    height: 40,
-    borderRadius: Radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
-    opacity: 0.9,
-    zIndex: 999,
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: EDGE_WIDTH,
   },
 });

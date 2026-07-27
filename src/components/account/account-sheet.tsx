@@ -1,7 +1,7 @@
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
-import { BottomSheet } from '@/components/ui/bottom-sheet';
+import { SideSheet } from '@/components/ui/side-sheet';
 import { Icon, type IconName } from '@/components/ui/icon';
 import { ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { CHANNEL_META } from '@/data/mock-clients';
@@ -14,8 +14,8 @@ export function AccountSheet({ visible, onClose }: { visible: boolean; onClose: 
   const toggleScheme = useThemeToggle();
 
   return (
-    <BottomSheet visible={visible} onClose={onClose} maxHeight={520}>
-      <View style={styles.container}>
+    <SideSheet visible={visible} onClose={onClose}>
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.profileRow}>
           <View style={[styles.avatar, { backgroundColor: theme.accentSoft }]}>
             <Icon name="person.crop.circle" size={30} color={theme.accent} />
@@ -30,7 +30,7 @@ export function AccountSheet({ visible, onClose }: { visible: boolean; onClose: 
           </View>
           <View style={[styles.channelBadge, { backgroundColor: theme.accentSoft }]}>
             <ThemedText type="small" style={{ color: theme.accent }} numberOfLines={1}>
-              {CHANNEL_META[mockSeller.channel].label}
+              {mockSeller.channels.map((c) => CHANNEL_META[c].label).join(' · ')}
             </ThemedText>
           </View>
         </View>
@@ -58,8 +58,8 @@ export function AccountSheet({ visible, onClose }: { visible: boolean; onClose: 
             onPress={() => scheme !== 'dark' && toggleScheme()}
           />
         </View>
-      </View>
-    </BottomSheet>
+      </ScrollView>
+    </SideSheet>
   );
 }
 
@@ -105,6 +105,7 @@ function ModeOption({
 const styles = StyleSheet.create({
   container: {
     paddingHorizontal: Spacing.four,
+    paddingTop: Spacing.four,
     paddingBottom: Spacing.four,
     gap: Spacing.three,
   },

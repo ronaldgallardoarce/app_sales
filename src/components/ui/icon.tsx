@@ -45,8 +45,10 @@ const GLYPHS = {
   gearshape: 'cog-outline',
   whatsapp: 'whatsapp',
   'phone.fill': 'phone',
+  smartphone: 'cellphone',
   'list.bullet': 'format-list-bulleted',
   mappin: 'map-marker',
+  'mappin.slash': 'map-marker-off',
   'person.fill': 'account',
   polygon: 'vector-polygon',
   'square.dashed': 'vector-square',
@@ -55,6 +57,17 @@ const GLYPHS = {
   'figure.walk': 'walk',
   'car.fill': 'car-outline',
   'moto.fill': 'motorbike',
+  camera: 'camera-outline',
+  'doc.text': 'text-box-outline',
+  checklist: 'format-list-checks',
+  star: 'star-outline',
+  'star.fill': 'star',
+  'flag.fill': 'flag-variant',
+  calendar: 'calendar-outline',
+  'exclamationmark.circle': 'alert-circle-outline',
+  photo: 'image-outline',
+  'folder.fill': 'folder-image',
+  'door.exit': 'exit-run',
 } as const;
 
 export type IconName = keyof typeof GLYPHS;
