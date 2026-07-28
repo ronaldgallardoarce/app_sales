@@ -21,9 +21,6 @@ export function ProductCard({
   // Subscribing to the cart here (rather than taking a prop) is what keeps rows in
   // sync: the FlatList would otherwise need its renderItem rebuilt on every change.
   const { lines } = useCart();
-  const primaryVariant = product.variants[0];
-  const hasVariants = product.variants.length > 1;
-  const code = hasVariants ? primaryVariant.sku.split('-').slice(0, 2).join('-') : primaryVariant.sku;
   const inOrder = lines.some((line) => line.productId === product.id);
 
   return (
@@ -38,16 +35,16 @@ export function ProductCard({
       ]}>
       <View style={styles.info}>
         <ThemedText type="smallBold" numberOfLines={1} style={styles.name}>
-          {code} - {product.name}
+          {product.id} - {product.name}
         </ThemedText>
         <View style={styles.metaRow}>
           <ThemedText style={[styles.family, { color: theme.textSecondary }]} numberOfLines={1}>
             {product.family}
           </ThemedText>
-          {hasVariants ? (
-            <View style={[styles.variantPill, { backgroundColor: theme.backgroundSelected }]}>
-              <ThemedText style={[styles.variantText, { color: theme.textSecondary }]}>
-                {product.variants.length} sabores
+          {product.sizeLabel ? (
+            <View style={[styles.sizePill, { backgroundColor: theme.backgroundSelected }]}>
+              <ThemedText style={[styles.sizeText, { color: theme.textSecondary }]}>
+                {product.sizeLabel}
               </ThemedText>
             </View>
           ) : null}
@@ -55,7 +52,7 @@ export function ProductCard({
       </View>
 
       <ThemedText style={[styles.price, { color: theme.success }]} numberOfLines={1}>
-        {formatBs(primaryVariant.priceUnidad)}
+        {formatBs(product.priceUnidad)}
       </ThemedText>
 
       {inOrder ? (
@@ -98,13 +95,13 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
     textTransform: 'uppercase',
   },
-  variantPill: {
+  sizePill: {
     flexShrink: 0,
     paddingHorizontal: 5,
     paddingVertical: 1,
     borderRadius: Radius.pill,
   },
-  variantText: {
+  sizeText: {
     fontSize: 9,
     fontWeight: '700',
   },

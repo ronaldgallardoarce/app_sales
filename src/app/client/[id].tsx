@@ -1,13 +1,15 @@
 import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { VisitTimer } from '@/components/client/visit-timer';
+import { MiniMap } from '@/components/map/mini-map';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { useDialog } from '@/components/ui/dialog';
 import { Icon, type IconName } from '@/components/ui/icon';
+import { OfflineBadge } from '@/components/ui/offline-badge';
 import { PhotoPicker } from '@/components/ui/photo-picker';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { CHANNEL_META, CLIENT_STATE_META, EXIT_REASONS, REMOTE_REASONS, STATUS_META } from '@/data/mock-clients';
@@ -16,6 +18,7 @@ import { useClientVisits } from '@/context/client-visit-context';
 import { useContentInsets } from '@/hooks/use-content-insets';
 import { useTheme } from '@/hooks/use-theme';
 import type { ThemeColor } from '@/constants/theme';
+import { formatBs } from '@/utils/currency';
 import { distanceKm, formatDistance } from '@/utils/geo';
 
 type TravelMode = 'walking' | 'driving';
@@ -23,6 +26,26 @@ type VisitStep = 'none' | 'entrada' | 'tarea' | 'remoto';
 
 /** Geofence radius (meters) within which the seller is allowed to check in on-site. */
 const MIN_CHECKIN_DISTANCE_M = 300;
+
+/**
+ * Shared height for every option tile, so the visit row and the options grid line up
+ * instead of each settling on whatever its own content happened to measure. Matches what
+ * the visit buttons used to compute naturally: 16 + 38 icon + 6 gap + 20 label + 16.
+ */
+const OPTION_TILE_HEIGHT = 96;
+
+/** Travel modes offered for directions. Google Maps has no motorbike mode, so it drives. */
+const TRAVEL_OPTIONS: {
+  icon: IconName;
+  label: string;
+  mode: TravelMode;
+  color: ThemeColor;
+  soft: ThemeColor;
+}[] = [
+  { icon: 'figure.walk', label: 'Caminando', mode: 'walking', color: 'success', soft: 'successSoft' },
+  { icon: 'moto.fill', label: 'Moto', mode: 'driving', color: 'accentAlt', soft: 'accentAltSoft' },
+  { icon: 'car.fill', label: 'Vehículo', mode: 'driving', color: 'accent', soft: 'accentSoft' },
+];
 
 export default function ClientDetailScreen() {
   const theme = useTheme();
@@ -38,12 +61,30 @@ export default function ClientDetailScreen() {
   const [exitPhotos, setExitPhotos] = useState<string[]>([]);
   const [remoteReason, setRemoteReason] = useState<string | null>(null);
   const [remoteSheetVisible, setRemoteSheetVisible] = useState(false);
+  const [travelSheetVisible, setTravelSheetVisible] = useState(false);
+  // Open on arrival: the figures are what the seller checks before deciding how to work
+  // the client, so hiding them by default would bury the reason the card exists.
+  const [summaryOpen, setSummaryOpen] = useState(true);
 
   const client = clients.find((c) => c.id === id) ?? null;
 
   // Only 'no-visitado' clients still need to check in; the rest already did, so
   // "Presencial" takes them straight to the task step.
   const needsCheckIn = client?.status === 'no-visitado';
+
+  // Inputs for the check-in mini map. They live above the "client not found" guard
+  // because hooks cannot sit behind an early return, and they are memoized because
+  // MiniMap rebuilds its HTML on identity change — a fresh literal every render would
+  // reload the whole Leaflet page, and this screen re-renders on every visit tick.
+  const clientPin = useMemo(
+    () => (client ? { lat: client.lat, lng: client.lng } : null),
+    [client],
+  );
+  const pinColor = client ? STATUS_META[client.status].color : 'accent';
+  const miniMapColors = useMemo(
+    () => ({ user: theme.accent, client: theme[pinColor], link: theme.accent }),
+    [theme, pinColor],
+  );
 
   const goBack = () => {
     if (visitStep === 'tarea') {
@@ -134,98 +175,114 @@ export default function ClientDetailScreen() {
             <ThemedText type="smallBold" style={styles.headerTitle}>
               {visitStep === 'none' ? 'Cliente' : visitStep === 'remoto' ? 'Pedido remoto' : 'Visita presencial'}
             </ThemedText>
+            {/* The owner, not the point of sale: the route is organised by who the
+                account belongs to, and the header is route-level context. The card
+                below names the specific child client being visited. */}
             <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-              {client.code}-{client.name}
+              {client.ownerCode}-{client.owner}
             </ThemedText>
           </View>
+
+          <OfflineBadge />
 
           {/* Visit counter lives in the header so it never displaces content */}
           <VisitTimer clientId={client.id} compact />
 
-          <Chip icon="clock.fill" label={visit.label} color={theme[visit.color]} soft={theme[visit.soft]} />
+          <Chip label={visit.label} color={theme[visit.color]} soft={theme[visit.soft]} />
         </View>
       </SafeAreaView>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.three }]}>
-        {/* Summary — identity, metrics and purchase limit in one compact card */}
+        {/* Summary — identity, metrics and purchase limit in one compact card. Collapsible
+            because the figures are reference data: worth a look on arrival, then in the way
+            of the actions below for the rest of the visit. */}
         <View style={[styles.summaryCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-          <View style={styles.identityRow}>
+          {/* The child client, and the card's toggle. A storefront rather than a person,
+              because this identifies a point of sale. Code and name on one line — two
+              lines for what is a single identifier only made the card taller. */}
+          <Pressable onPress={() => setSummaryOpen((open) => !open)} style={styles.identityRow}>
             <View style={[styles.avatar, { backgroundColor: theme.accentSoft }]}>
-              <Icon name="person.crop.circle" size={22} color={theme.accent} />
+              <Icon name="store" size={15} color={theme.accent} />
             </View>
-            <View style={styles.identityText}>
-              <ThemedText type="smallBold" style={styles.name} numberOfLines={1}>
-                {client.name}
-              </ThemedText>
-              <ThemedText type="small" themeColor="textSecondary">
-                Código {client.code}
-              </ThemedText>
-            </View>
-          </View>
+            <ThemedText type="smallBold" style={styles.name} numberOfLines={2}>
+              {client.code}-{client.name}
+            </ThemedText>
+            <Icon name={summaryOpen ? 'chevron.up' : 'chevron.down'} size={15} color={theme.textSecondary} />
+          </Pressable>
 
-          <View style={styles.metaGrid}>
-            <MetaItem label="Canal" value={CHANNEL_META[client.channel].label} />
-            <MetaItem label="Estado" value={state.label} tone={theme[state.color]} />
-            <MetaItem
-              label="Línea de crédito"
-              value={client.hasCreditLine ? 'Sí' : 'No'}
-              tone={client.hasCreditLine ? theme.success : undefined}
-            />
-            <MetaItem
-              label="Es Pareto"
-              value={client.isPareto ? 'Sí' : 'No'}
-              tone={client.isPareto ? theme.accent : undefined}
-            />
-          </View>
-
-          <View style={[styles.hr, { backgroundColor: theme.border }]} />
-
-          <View style={styles.grid}>
-            <StatTile
-              label="Deuda total"
-              value={`Bs ${client.balance}`}
-              tone={hasDebt ? theme.danger : undefined}
-            />
-            <StatTile
-              label="Deuda mora"
-              value={`Bs ${client.overdueDebt}`}
-              tone={client.overdueDebt > 0 ? theme.danger : undefined}
-            />
-            <StatTile
-              label="Días rest."
-              value={client.daysRemaining > 0 ? `${client.daysRemaining} días` : 'Vencido'}
-              tone={dueDateTone}
-            />
-            <StatTile label="Últ. compra" value={client.lastPurchase} />
-            <StatTile label="Ticket prom." value={`Bs ${client.avgTicket}`} />
-            <StatTile label="Drop size" value={`Bs ${client.dropSize}`} />
-          </View>
-
-          {visitStep !== 'entrada' ? (
+          {summaryOpen ? (
             <>
-              <View style={[styles.hr, { backgroundColor: theme.border }]} />
-
-              <View style={styles.limitHeader}>
-                <ThemedText type="small" themeColor="textSecondary">
-                  Límite de compras
-                </ThemedText>
-                <ThemedText type="smallBold" style={{ color: client.purchaseLimitPct >= 85 ? theme.danger : theme.accent }}>
-                  {client.purchaseLimitPct}%
-                </ThemedText>
-              </View>
-              <View style={[styles.progressTrack, { backgroundColor: theme.backgroundSelected }]}>
-                <View
-                  style={[
-                    styles.progressFill,
-                    {
-                      width: `${Math.min(client.purchaseLimitPct, 100)}%`,
-                      backgroundColor: client.purchaseLimitPct >= 85 ? theme.danger : theme.accent,
-                    },
-                  ]}
+              <View style={styles.metaGrid}>
+                <MetaItem label="Canal" value={CHANNEL_META[client.channel].label} />
+                <MetaItem label="Estado" value={state.label} tone={theme[state.color]} />
+                <MetaItem
+                  label="Línea de crédito"
+                  value={client.hasCreditLine ? 'Sí' : 'No'}
+                  tone={client.hasCreditLine ? theme.success : undefined}
+                />
+                <MetaItem
+                  label="Es Pareto"
+                  value={client.isPareto ? 'Sí' : 'No'}
+                  tone={client.isPareto ? theme.accent : undefined}
                 />
               </View>
+
+              <View style={[styles.hr, { backgroundColor: theme.border }]} />
+
+              <View style={styles.grid}>
+                <StatTile
+                  label="Deuda total"
+                  value={formatBs(client.balance)}
+                  tone={hasDebt ? theme.danger : undefined}
+                />
+                <StatTile
+                  label="Deuda mora"
+                  value={formatBs(client.overdueDebt)}
+                  tone={client.overdueDebt > 0 ? theme.danger : undefined}
+                />
+                <StatTile
+                  label="Días rest."
+                  value={client.daysRemaining > 0 ? `${client.daysRemaining} días` : 'Vencido'}
+                  tone={dueDateTone}
+                />
+                <StatTile label="Últ. compra" value={client.lastPurchase} />
+                <StatTile label="Ticket prom." value={formatBs(client.avgTicket)} />
+                <StatTile label="Drop size" value={formatBs(client.dropSize)} />
+              </View>
+
+              {visitStep !== 'entrada' ? (
+                <>
+                  <View style={[styles.hr, { backgroundColor: theme.border }]} />
+
+                  {/* Label, bar and figure on one row: three stacked elements for a single
+                      percentage was more vertical space than the fact deserves. */}
+                  <View style={styles.limitRow}>
+                    <ThemedText type="small" themeColor="textSecondary" style={styles.limitLabel}>
+                      Límite de compras
+                    </ThemedText>
+                    <View style={[styles.progressTrack, { backgroundColor: theme.backgroundSelected }]}>
+                      <View
+                        style={[
+                          styles.progressFill,
+                          {
+                            width: `${Math.min(client.purchaseLimitPct, 100)}%`,
+                            backgroundColor: client.purchaseLimitPct >= 85 ? theme.danger : theme.accent,
+                          },
+                        ]}
+                      />
+                    </View>
+                    <ThemedText
+                      style={[
+                        styles.limitPct,
+                        { color: client.purchaseLimitPct >= 85 ? theme.danger : theme.accent },
+                      ]}>
+                      {client.purchaseLimitPct}%
+                    </ThemedText>
+                  </View>
+                </>
+              ) : null}
             </>
           ) : null}
         </View>
@@ -234,6 +291,34 @@ export default function ClientDetailScreen() {
           <>
             {/* Distance / geofence */}
             <View style={[styles.card, styles.distanceCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+              {/* Where both parties are, before the numbers describing the gap between
+                  them — the figure below reads as a caption to the picture. */}
+              {clientPin ? (
+                <View style={[styles.miniMapFrame, { borderColor: theme.border }]}>
+                  <MiniMap
+                    userLocation={mockSeller.location}
+                    clientLocation={clientPin}
+                    radiusM={MIN_CHECKIN_DISTANCE_M}
+                    colors={miniMapColors}
+                  />
+                </View>
+              ) : null}
+
+              <View style={styles.legendRow}>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: theme.accent }]} />
+                  <ThemedText type="small" themeColor="textSecondary" style={styles.legendText}>
+                    Tu ubicación
+                  </ThemedText>
+                </View>
+                <View style={styles.legendItem}>
+                  <Icon name="mappin" size={13} color={theme[visit.color]} />
+                  <ThemedText type="small" themeColor="textSecondary" style={styles.legendText}>
+                    {client.name}
+                  </ThemedText>
+                </View>
+              </View>
+
               <View style={styles.distanceTop}>
                 <View style={[styles.distanceIcon, { backgroundColor: theme.accentSoft }]}>
                   <Icon name="mappin" size={20} color={theme.accent} />
@@ -411,13 +496,7 @@ export default function ClientDetailScreen() {
 
             {/* More actions */}
             <SectionLabel>Más opciones</SectionLabel>
-            <View style={[styles.card, styles.actionCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-              <ActionRow icon="clipboard" label="Más información" sub="Ficha completa del cliente" color="accent" soft="accentSoft" onPress={soon} />
-              <Divider />
-              <ActionRow icon="creditcard" label="Línea de crédito" sub="Detalle y condiciones" color="success" soft="successSoft" onPress={soon} />
-              <Divider />
-              <ActionRow icon="cash" label="Estado de cuenta" sub="Pagos, deuda e historial de ventas" color="violet" soft="violetSoft" onPress={soon} />
-            </View>
+            <MoreOptionsGrid onSelect={soon} />
           </>
         ) : (
           <>
@@ -438,27 +517,14 @@ export default function ClientDetailScreen() {
                   }
                 }}
               />
+              {/* No returns here: a return is something that happens during a visit, so
+                  it only belongs to the started-visit view further down. */}
               <OptionButton icon="smartphone" label="Remoto" color="violet" soft="violetSoft" onPress={() => setVisitStep('remoto')} />
-              <OptionButton icon="shippingbox.slash" label="Devoluciones" color="accentAlt" soft="accentAltSoft" onPress={soon} />
-            </View>
-
-            {/* Directions */}
-            <SectionLabel>Cómo llegar</SectionLabel>
-            <View style={styles.optionsRow}>
-              <OptionButton icon="figure.walk" label="Caminando" color="success" soft="successSoft" onPress={() => openDirections('walking')} />
-              <OptionButton icon="moto.fill" label="Moto" color="accentAlt" soft="accentAltSoft" onPress={() => openDirections('driving')} />
-              <OptionButton icon="car.fill" label="Vehículo" color="accent" soft="accentSoft" onPress={() => openDirections('driving')} />
             </View>
 
             {/* More actions */}
             <SectionLabel>Más opciones</SectionLabel>
-            <View style={[styles.card, styles.actionCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-              <ActionRow icon="clipboard" label="Más información" sub="Ficha completa del cliente" color="accent" soft="accentSoft" onPress={soon} />
-              <Divider />
-              <ActionRow icon="creditcard" label="Línea de crédito" sub="Detalle y condiciones" color="success" soft="successSoft" onPress={soon} />
-              <Divider />
-              <ActionRow icon="cash" label="Estado de cuenta" sub="Pagos, deuda e historial de ventas" color="violet" soft="violetSoft" onPress={soon} />
-            </View>
+            <MoreOptionsGrid onSelect={soon} onDirections={() => setTravelSheetVisible(true)} />
           </>
         )}
       </ScrollView>
@@ -504,6 +570,12 @@ export default function ClientDetailScreen() {
             </ThemedText>
           </View>
 
+          {/* Evidence first: the photo has to be taken standing at the client, so it comes
+              before the reason, which can be picked afterwards from anywhere. Camera only —
+              a shot from the gallery says nothing about this visit. */}
+          <SectionLabel>Evidencia fotográfica</SectionLabel>
+          <PhotoPicker uris={exitPhotos} onChange={setExitPhotos} max={3} cameraOnly />
+
           <SectionLabel>Motivo</SectionLabel>
           <View style={styles.reasonGroup}>
             {EXIT_REASONS.map((reason) => {
@@ -526,9 +598,46 @@ export default function ClientDetailScreen() {
               );
             })}
           </View>
+        </ScrollView>
+      </BottomSheet>
 
-          <SectionLabel>Evidencia fotográfica</SectionLabel>
-          <PhotoPicker uris={exitPhotos} onChange={setExitPhotos} max={3} />
+      {/* Travel mode picker — opening the maps app closes the sheet, so there is nothing
+          to confirm and no footer. */}
+      <BottomSheet visible={travelSheetVisible} onClose={() => setTravelSheetVisible(false)}>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.exitSheet}>
+          <View style={styles.sheetHeader}>
+            <View style={[styles.sheetIcon, { backgroundColor: theme.accentSoft }]}>
+              <Icon name="route" size={22} color={theme.accent} />
+            </View>
+            <View style={styles.sheetHeaderText}>
+              <ThemedText type="smallBold" style={styles.sheetTitle}>
+                Cómo llegar
+              </ThemedText>
+              <ThemedText type="small" themeColor="textSecondary">
+                Elegí el medio de transporte
+              </ThemedText>
+            </View>
+          </View>
+
+          <View style={styles.reasonGroup}>
+            {TRAVEL_OPTIONS.map((option) => (
+              <Pressable
+                key={option.label}
+                onPress={() => {
+                  setTravelSheetVisible(false);
+                  openDirections(option.mode);
+                }}
+                style={[styles.reasonRow, { backgroundColor: theme.background, borderColor: theme.border }]}>
+                <View style={[styles.actionIcon, { backgroundColor: theme[option.soft] }]}>
+                  <Icon name={option.icon} size={16} color={theme[option.color]} />
+                </View>
+                <ThemedText type="smallBold" style={styles.reasonLabel}>
+                  {option.label}
+                </ThemedText>
+                <Icon name="chevron.right" size={16} color={theme.textSecondary} />
+              </Pressable>
+            ))}
+          </View>
         </ScrollView>
       </BottomSheet>
 
@@ -588,20 +697,10 @@ function withAlpha(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-function Chip({
-  icon,
-  label,
-  color,
-  soft,
-}: {
-  icon: IconName;
-  label: string;
-  color: string;
-  soft: string;
-}) {
+/** Visit status as a coloured pill. Text only — the colour already carries the state. */
+function Chip({ label, color, soft }: { label: string; color: string; soft: string }) {
   return (
     <View style={[styles.chip, { backgroundColor: soft }]}>
-      <Icon name={icon} size={11} color={color} />
       <ThemedText type="smallBold" style={[styles.chipText, { color }]}>
         {label}
       </ThemedText>
@@ -676,41 +775,64 @@ function OptionButton({
   );
 }
 
-function ActionRow({
+/**
+ * Client information entry points. Same square-tile idiom as the visit options above, so
+ * the whole screen reads as one grammar instead of a grid plus a stack of list rows.
+ * "Estado de cuenta" and "Historial de ventas" are separate destinations: one is what the
+ * client owes, the other what they have bought.
+ */
+function MoreOptionsGrid({
+  onSelect,
+  onDirections,
+}: {
+  onSelect: () => void;
+  /**
+   * Opens the travel-mode picker. Optional because directions are pointless once the
+   * seller has marked entry — they are already standing at the client.
+   */
+  onDirections?: () => void;
+}) {
+  return (
+    <View style={styles.optionsGrid}>
+      <GridOption icon="clipboard" label="Inf. del cliente" color="accent" soft="accentSoft" onPress={onSelect} />
+      <GridOption icon="creditcard" label="Línea de crédito" color="success" soft="successSoft" onPress={onSelect} />
+      <GridOption icon="cash" label="Estado de cuenta" color="violet" soft="violetSoft" onPress={onSelect} />
+      <GridOption icon="doc.text" label="Historial de ventas" color="accentAlt" soft="accentAltSoft" onPress={onSelect} />
+      {/* Last so the accent it shares with "Inf. del cliente" never lands in an adjacent tile. */}
+      {onDirections ? (
+        <GridOption icon="route" label="Cómo llegar" color="accent" soft="accentSoft" onPress={onDirections} />
+      ) : null}
+    </View>
+  );
+}
+
+/** Square tile sized for a wrapping 3-column grid — `OptionButton`'s `flex: 1` cannot wrap. */
+function GridOption({
   icon,
   label,
-  sub,
   color,
   soft,
   onPress,
 }: {
   icon: IconName;
   label: string;
-  sub: string;
   color: ThemeColor;
   soft: ThemeColor;
   onPress: () => void;
 }) {
   const theme = useTheme();
   return (
-    <Pressable onPress={onPress} style={styles.actionRow}>
-      <View style={[styles.actionIcon, { backgroundColor: theme[soft] }]}>
-        <Icon name={icon} size={16} color={theme[color]} />
+    <Pressable
+      onPress={onPress}
+      style={[styles.gridOption, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+      <View style={[styles.optionIcon, { backgroundColor: theme[soft] }]}>
+        <Icon name={icon} size={17} color={theme[color]} />
       </View>
-      <View style={styles.actionText}>
-        <ThemedText type="smallBold">{label}</ThemedText>
-        <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-          {sub}
-        </ThemedText>
-      </View>
-      <Icon name="chevron.right" size={16} color={theme.textSecondary} />
+      <ThemedText type="smallBold" numberOfLines={2} style={styles.gridOptionLabel}>
+        {label}
+      </ThemedText>
     </Pressable>
   );
-}
-
-function Divider() {
-  const theme = useTheme();
-  return <View style={[styles.divider, { backgroundColor: theme.border }]} />;
 }
 
 const styles = StyleSheet.create({
@@ -766,18 +888,16 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   avatar: {
-    width: 40,
-    height: 40,
+    width: 26,
+    height: 26,
     borderRadius: Radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  identityText: {
-    flex: 1,
-    gap: 1,
-  },
   name: {
-    fontSize: 15,
+    // Takes the slack left by the pin so a long trade name can wrap.
+    flex: 1,
+    fontSize: 13,
   },
   metaGrid: {
     flexDirection: 'row',
@@ -798,9 +918,8 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   chip: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    flexShrink: 0,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: Radius.pill,
@@ -815,35 +934,51 @@ const styles = StyleSheet.create({
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 6,
+    gap: 4,
   },
   statTile: {
+    // Six reference figures the seller scans, not reads: three per row at this size
+    // keeps them on two tight rows instead of pushing the visit actions off screen.
     flexGrow: 1,
     flexBasis: '30%',
     borderRadius: Radius.sm,
-    paddingHorizontal: Spacing.two,
-    paddingVertical: 6,
-    gap: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
   },
   statTileLabel: {
-    fontSize: 11,
+    fontSize: 9,
+    lineHeight: 12,
   },
   statTileValue: {
-    fontSize: 14,
+    fontSize: 12,
+    lineHeight: 15,
   },
-  limitHeader: {
+  limitRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  limitLabel: {
+    flexShrink: 0,
+    fontSize: 11,
   },
   progressTrack: {
-    height: 7,
+    // Takes the slack between the label and the figure, so the bar is as wide as the row
+    // allows without needing a width of its own.
+    flex: 1,
+    height: 5,
     borderRadius: Radius.pill,
     overflow: 'hidden',
   },
   progressFill: {
-    height: 7,
+    height: 5,
     borderRadius: Radius.pill,
+  },
+  limitPct: {
+    flexShrink: 0,
+    fontSize: 12,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
   sectionLabel: {
     fontSize: 12,
@@ -857,9 +992,10 @@ const styles = StyleSheet.create({
   },
   optionButton: {
     flex: 1,
+    height: OPTION_TILE_HEIGHT,
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 6,
-    paddingVertical: Spacing.three,
     borderRadius: Radius.md,
     borderWidth: 1,
   },
@@ -873,30 +1009,41 @@ const styles = StyleSheet.create({
   optionLabel: {
     fontSize: 12,
   },
-  actionCard: {
-    padding: 0,
-    gap: 0,
-  },
-  actionRow: {
+  optionsGrid: {
     flexDirection: 'row',
-    alignItems: 'center',
+    flexWrap: 'wrap',
+    // Centred so a short last row (two tiles under three) sits under the middle of the
+    // grid instead of hanging off the left edge. A full row of three is unaffected.
+    justifyContent: 'center',
     gap: Spacing.two,
-    padding: Spacing.three,
   },
-  actionIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: Radius.md,
+  gridOption: {
+    // A fixed basis rather than `flex: 1`: in a wrapping row, a lone tile on the last
+    // line would otherwise stretch to the full width and stop looking like a tile.
+    // Two columns, so the tiles are wider than tall — they keep the shared height to
+    // stay level with the visit row above, but they are no longer square.
+    flexBasis: '48%',
+    height: OPTION_TILE_HEIGHT,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 6,
+    borderRadius: Radius.md,
+    borderWidth: 1,
   },
-  actionText: {
-    flex: 1,
-    gap: 1,
+  gridOptionLabel: {
+    fontSize: 11,
+    // Tightened from the 20 that `smallBold` carries: two lines at 20 would not clear the
+    // icon inside a fixed-height tile.
+    lineHeight: 14,
+    textAlign: 'center',
   },
-  divider: {
-    height: 1,
-    marginLeft: Spacing.three + 34 + Spacing.two,
+  actionIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: Radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   primaryButton: {
     flexDirection: 'row',
@@ -929,6 +1076,33 @@ const styles = StyleSheet.create({
   distanceCard: {
     gap: Spacing.two,
   },
+  miniMapFrame: {
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    // Clips the WebView to the rounded corners, which it will not respect on its own.
+    overflow: 'hidden',
+  },
+  legendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 1,
+    gap: 5,
+  },
+  legendDot: {
+    width: 9,
+    height: 9,
+    borderRadius: Radius.pill,
+  },
+  legendText: {
+    flexShrink: 1,
+    fontSize: 11,
+  },
   distanceTop: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -960,19 +1134,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
-    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 6,
+    borderRadius: Radius.sm,
   },
   statusBannerText: {
     flex: 1,
     fontSize: 12,
   },
   exitSheet: {
-    paddingHorizontal: Spacing.four,
+    // Gutters match the app's standard Spacing.three rather than the wider Spacing.four
+    // these sheets used, which bought nothing and cost 16dp of row width.
+    paddingHorizontal: Spacing.three,
     paddingTop: Spacing.two,
-    paddingBottom: Spacing.three,
-    gap: Spacing.two,
+    // Small: the footer's own top padding already separates the last row from the button,
+    // so a full Spacing.three here just doubled that gap.
+    paddingBottom: Spacing.one,
+    gap: 6,
   },
   sheetHeader: {
     flexDirection: 'row',
@@ -980,8 +1158,8 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   sheetIcon: {
-    width: 44,
-    height: 44,
+    width: 36,
+    height: 36,
     borderRadius: Radius.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -991,34 +1169,41 @@ const styles = StyleSheet.create({
     gap: 1,
   },
   sheetTitle: {
-    fontSize: 17,
+    fontSize: 15,
   },
   reasonGroup: {
-    gap: 6,
+    gap: 4,
   },
   reasonRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
-    padding: Spacing.three,
-    borderRadius: Radius.md,
+    // Was a uniform Spacing.three: at four or five options that padding alone added more
+    // height than the labels did, and the sheet ran past the fold.
+    paddingVertical: 8,
+    paddingHorizontal: Spacing.two,
+    borderRadius: Radius.sm,
     borderWidth: 1,
   },
   radio: {
-    width: 20,
-    height: 20,
+    width: 18,
+    height: 18,
     borderRadius: Radius.pill,
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
   radioDot: {
-    width: 10,
-    height: 10,
+    width: 8,
+    height: 8,
     borderRadius: Radius.pill,
   },
   reasonLabel: {
     flex: 1,
+    // Explicit lineHeight: `small`/`smallBold` carry 20, which a dropped fontSize does not
+    // bring down with it, so the row would keep the height of the larger type.
+    fontSize: 13,
+    lineHeight: 17,
   },
   remoteHeading: {
     fontSize: 15,

@@ -6,7 +6,23 @@ import type { MapClient, SalesChannel } from '@/data/mock-clients';
  * How the seller is expected to answer a task. The response type drives which
  * input the app renders when the seller opens the task to complete it.
  */
-export type TaskResponseType = 'foto' | 'texto' | 'checklist' | 'calificacion';
+export type TaskResponseType =
+  | 'foto'
+  | 'texto'
+  | 'checklist'
+  | 'calificacion'
+  | 'baja-rotacion';
+
+/**
+ * Warehouse lot the stock at the client came from. These two codes are what is
+ * printed on the package and what the seller reads out loud, so they are stored and
+ * rendered as the codes themselves — expanding them into invented long names would
+ * only make the seller translate back.
+ */
+export type LotCode = 'SC' | 'LP';
+
+/** The pickable lots. Single source for the form and any future consumer. */
+export const LOT_CODES: LotCode[] = ['SC', 'LP'];
 
 /** Optional urgency the supervisor may assign to a task. */
 export type TaskPriority = 'baja' | 'normal' | 'alta' | 'urgente';
@@ -67,6 +83,11 @@ export const RESPONSE_META: Record<
   texto: { label: 'Texto', icon: 'doc.text', hint: 'Escribí tu respuesta.' },
   checklist: { label: 'Checklist', icon: 'checklist', hint: 'Marcá cada punto verificado.' },
   calificacion: { label: 'Calificación', icon: 'star', hint: 'Asigná una calificación de 1 a 5.' },
+  'baja-rotacion': {
+    label: 'Baja rotación',
+    icon: 'shippingbox.slash',
+    hint: 'Registrá el producto de baja rotación con su vencimiento, lote, cantidad y fotos.',
+  },
 };
 
 /** Visual metadata for each priority (theme color token keys). */
@@ -158,6 +179,15 @@ const channelTasks: SupervisorTask[] = [
     priority: 'normal',
     required: true,
     dueDate: 'Hoy',
+  },
+  {
+    id: 't-chan-trad-baja-rotacion',
+    scope: { kind: 'canal', channel: 'tradicional' },
+    title: 'Registro de baja rotación',
+    description: 'Registrá el producto con baja rotación detectado en el punto de venta.',
+    color: 'accentAlt',
+    responseType: 'baja-rotacion',
+    required: false,
   },
   {
     id: 't-chan-pan-freshness',

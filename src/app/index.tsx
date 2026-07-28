@@ -1,11 +1,11 @@
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
 import { CardShadow, Radius, Spacing } from '@/constants/theme';
+import { useConnectivity } from '@/context/connectivity-context';
 import { CHANNEL_META } from '@/data/mock-clients';
 import { menuOptions, type MenuOption } from '@/data/menu-options';
 import { mockSeller } from '@/data/mock-user';
@@ -19,7 +19,9 @@ export default function HomeScreen() {
   const router = useRouter();
   const insets = useContentInsets();
 
-  const [offline, setOffline] = useState(false);
+  // Shared: the rest of the app reads this to show the offline badge and to gate
+  // the actions that cannot work without a connection.
+  const { offline, setOffline } = useConnectivity();
 
   return (
     <View style={[styles.root, { backgroundColor: theme.background }]}>

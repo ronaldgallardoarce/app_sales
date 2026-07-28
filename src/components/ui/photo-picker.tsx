@@ -1,11 +1,12 @@
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useState } from 'react';
-import { Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
-import { ControlHeight, Overlay, Radius, Spacing } from '@/constants/theme';
+import { ImageViewer } from '@/components/ui/image-viewer';
+import { ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 /**
@@ -22,13 +23,22 @@ export function PhotoPicker({
   uris,
   onChange,
   max = 3,
+  cameraOnly = false,
 }: {
   uris: string[];
   onChange: (uris: string[]) => void;
   max?: number;
+  /**
+   * Drops the gallery button. For evidence that has to be produced on the spot — an
+   * exceptional exit — an existing photo proves nothing about the current visit, so the
+   * gallery is not a convenience there but a way around the requirement.
+   */
+  cameraOnly?: boolean;
 }) {
   const theme = useTheme();
-  const [preview, setPreview] = useState<string | null>(null);
+  // An index rather than a uri: the viewer pages through the whole set, so it needs to know
+  // where to open, not just what to show.
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [permissionNotice, setPermissionNotice] = useState<string | null>(null);
   const remaining = max - uris.length;
 
@@ -66,7 +76,7 @@ export function PhotoPicker({
     <View style={styles.group}>
       <View style={styles.grid}>
         {uris.map((uri, i) => (
-          <Pressable key={uri} onPress={() => setPreview(uri)} style={styles.tile}>
+          <Pressable key={uri} onPress={() => setPreviewIndex(i)} style={styles.tile}>
             <Image source={{ uri }} style={styles.image} contentFit="cover" transition={150} />
             <Pressable
               hitSlop={6}
@@ -91,14 +101,16 @@ export function PhotoPicker({
               Cámara
             </ThemedText>
           </Pressable>
-          <Pressable
-            onPress={pickFromGallery}
-            style={[styles.sourceButton, { borderColor: theme.border, backgroundColor: theme.background }]}>
-            <Icon name="photo" size={15} color={theme.accent} />
-            <ThemedText type="smallBold" style={[styles.sourceLabel, { color: theme.accent }]}>
-              Galería
-            </ThemedText>
-          </Pressable>
+          {cameraOnly ? null : (
+            <Pressable
+              onPress={pickFromGallery}
+              style={[styles.sourceButton, { borderColor: theme.border, backgroundColor: theme.background }]}>
+              <Icon name="photo" size={15} color={theme.accent} />
+              <ThemedText type="smallBold" style={[styles.sourceLabel, { color: theme.accent }]}>
+                Galería
+              </ThemedText>
+            </Pressable>
+          )}
         </View>
       ) : null}
 
@@ -113,16 +125,12 @@ export function PhotoPicker({
         {uris.length}/{max} fotos · tocá una para ampliarla
       </ThemedText>
 
-      <Modal visible={preview !== null} transparent animationType="fade" onRequestClose={() => setPreview(null)}>
-        <Pressable style={styles.backdrop} onPress={() => setPreview(null)}>
-          {preview ? <Image source={{ uri: preview }} style={styles.preview} contentFit="contain" /> : null}
-          <Pressable
-            onPress={() => setPreview(null)}
-            style={[styles.close, { backgroundColor: theme.backgroundElement }]}>
-            <Icon name="xmark" size={18} color={theme.text} />
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <ImageViewer
+        visible={previewIndex !== null}
+        uris={uris}
+        initialIndex={previewIndex ?? 0}
+        onClose={() => setPreviewIndex(null)}
+      />
     </View>
   );
 }
@@ -189,25 +197,5 @@ const styles = StyleSheet.create({
   },
   hint: {
     fontSize: 11,
-  },
-  backdrop: {
-    flex: 1,
-    backgroundColor: Overlay,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  preview: {
-    width: '92%',
-    height: '80%',
-  },
-  close: {
-    position: 'absolute',
-    top: 60,
-    right: Spacing.four,
-    width: 40,
-    height: 40,
-    borderRadius: Radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 });

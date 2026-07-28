@@ -1,31 +1,36 @@
 export type UnitCode = 'CAJA' | 'UNIDAD';
 
-export interface ProductVariant {
-  sku: string;
+export interface Product {
+  /**
+   * Numeric product code, the database identity and the code the seller reads out
+   * loud. There is no second textual identifier: one product, one code.
+   */
+  id: number;
+  /** Full commercial description, flavor included — this is what the DB stores. */
+  name: string;
+  family: string;
+  /**
+   * Name without flavor or size, e.g. "GELATINA". Not a database column: it is
+   * derived so sibling products can be matched for suggestions.
+   */
+  baseName: string;
+  /**
+   * Flavor as it appears inside `name`. The database has no flavor attribute, so
+   * two flavors of the same line are unrelated rows that only look alike.
+   */
   flavor?: string;
   colorDot?: string;
+  /** Size attribute, e.g. "250 gr" / "1 L". Real column, unlike flavor. */
+  sizeLabel?: string;
+  inStock: boolean;
+  /** Smallest sellable piece and the case holding it — names vary per product. */
+  minUnit: string;
+  maxUnit: string;
   ice: number;
   priceUnidad: number;
   priceCaja: number;
   unitsPerCase: number;
-  priceMin: number;
-  priceMax: number;
   utilidadPct: number;
-}
-
-export interface Product {
-  id: string;
-  name: string;
-  family: string;
-  inStock: boolean;
-  /**
-   * How this product is packaged: the smallest sellable piece and the case that
-   * holds it — e.g. "Botella" inside "Caja". Names vary per product, so the UI
-   * shows these rather than the generic UNIDAD / CAJA codes.
-   */
-  minUnit?: string;
-  maxUnit?: string;
-  variants: ProductVariant[];
 }
 
 export interface Client {
@@ -34,33 +39,28 @@ export interface Client {
 }
 
 /**
- * One unit type of one variant in the order. A product ordered by both case and
- * loose piece produces two lines — their prices are independent fields, so they
- * cannot be collapsed without losing the ability to reconstruct the subtotal.
- * The order panel groups them by `sku` to show a single row per product.
+ * One product in the order, holding both quantities at once. A product ordered by
+ * cases and by loose pieces is a single agreement, so splitting it into two rows
+ * only forced the UI to glue it back together.
  *
  * Packaging and price data is copied onto the line on purpose: an order line is a
  * record of what was agreed, so a later catalog change must not rewrite it.
  */
 export interface CartLine {
-  id: string;
-  productId: string;
+  /** The product code: one line per product, never one per unit type. */
+  productId: number;
   productName: string;
   flavor?: string;
-  sku: string;
-  unit: UnitCode;
-  /**
-   * Both packaging names, not just this line's own. A case-only line still has to
-   * be able to state its total in minimum units ("2 Caja = 40 Bolsa"), which is
-   * impossible if the line only knows the unit it was ordered in.
-   */
+  sizeLabel?: string;
   minUnitLabel: string;
   maxUnitLabel: string;
-  qty: number;
-  unitPrice: number;
-  /** ICE tax per unit, for the order breakdown. */
+  /** Quantity in maximum units (cases) and in minimum units (loose pieces). */
+  qtyMax: number;
+  qtyMin: number;
+  /** Price per maximum unit and per minimum unit, frozen when the line was agreed. */
+  unitPriceMax: number;
+  unitPriceMin: number;
   ice: number;
-  /** Minimum units contained in one maximum unit, for the equivalence hint. */
   unitsPerCase: number;
 }
 

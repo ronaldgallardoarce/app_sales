@@ -11,6 +11,7 @@ import { MapLegend } from '@/components/map/map-legend';
 import { RouteSheet } from '@/components/map/route-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { Icon, type IconName } from '@/components/ui/icon';
+import { OfflineBadge } from '@/components/ui/offline-badge';
 import { ChipPadding, ControlHeight, FloatingShadow, Radius, Spacing } from '@/constants/theme';
 import {
   CHANNEL_META,
@@ -170,6 +171,10 @@ export default function MapScreen() {
           <ThemedText type="smallBold" style={styles.headerTitle} numberOfLines={1}>
             {viewMode === 'map' ? 'Mapa de ruta' : 'Clientes'}
           </ThemedText>
+
+          {/* Ahead of the count and the view toggle: this row runs out of width first,
+              so the badge takes the first trailing slot instead of wrapping. */}
+          <OfflineBadge />
 
           {viewMode === 'map' ? (
             <View style={[styles.countBadge, { backgroundColor: theme.backgroundElement }]}>

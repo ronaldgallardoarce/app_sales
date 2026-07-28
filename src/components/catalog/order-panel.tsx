@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { useDialog } from '@/components/ui/dialog';
@@ -6,10 +6,11 @@ import { Icon } from '@/components/ui/icon';
 import { ThemedText } from '@/components/themed-text';
 import { ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
+import { useConnectivity } from '@/context/connectivity-context';
 import { PAYMENT_METHODS, type PaymentMethod } from '@/data/mock-incentives';
 import { useTheme } from '@/hooks/use-theme';
 import type { CartLine } from '@/types/catalog';
-import { groupIntoItems, unitLabelOf } from '@/utils/order';
+import { lineAmount } from '@/utils/order';
 import { formatBs } from '@/utils/currency';
 
 export function OrderPanel({
@@ -30,9 +31,12 @@ export function OrderPanel({
   const theme = useTheme();
   const dialog = useDialog();
   const { lines, removeLine, totalAmount } = useCart();
+  const { offline } = useConnectivity();
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Contado');
 
-  const items = useMemo(() => groupIntoItems(lines), [lines]);
+  // Discounts and bonifications are resolved server-side, so there is nothing to
+  // continue to while offline.
+  const continueDisabled = lines.length === 0 || offline;
 
   const handleSavePreorder = () => {
     dialog.show({
@@ -53,46 +57,46 @@ export function OrderPanel({
           Aún no agregaste productos.
         </ThemedText>
       ) : (
-        items.map((item) => (
+        lines.map((line) => (
           // The whole row opens the product sheet, where quantities are edited with
           // the same stepper used to add them — no separate decrement button here.
           <Pressable
-            key={item.sku}
-            onPress={() => onEditLine?.(item.lines[0])}
+            key={String(line.productId)}
+            onPress={() => onEditLine?.(line)}
             style={[styles.line, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
             <View style={styles.lineTop}>
               <ThemedText type="smallBold" numberOfLines={1} style={styles.lineName}>
-                {item.productName}
-                {item.flavor ? ` · ${item.flavor}` : ''}
+                {line.productName}
               </ThemedText>
+              {line.sizeLabel ? (
+                <View style={[styles.sizePill, { backgroundColor: theme.backgroundSelected }]}>
+                  <ThemedText style={[styles.sizeText, { color: theme.textSecondary }]}>
+                    {line.sizeLabel}
+                  </ThemedText>
+                </View>
+              ) : null}
               <ThemedText style={[styles.lineSubtotal, { color: theme.success }]} numberOfLines={1}>
-                {formatBs(item.subtotal)}
+                {formatBs(lineAmount(line))}
               </ThemedText>
               <Pressable
                 hitSlop={8}
-                onPress={() => item.lines.forEach((line) => removeLine(line.id))}
+                onPress={() => removeLine(line.productId)}
                 style={[styles.iconButton, { backgroundColor: theme.dangerSoft }]}>
                 <Icon name="trash" size={14} color={theme.danger} />
               </Pressable>
             </View>
 
-            {/* One quantity per unit type, each with the price it was priced at. */}
-            {item.lines.map((line) => (
-              <View key={line.id} style={styles.qtyRow}>
-                <ThemedText type="smallBold" style={styles.qtyText}>
-                  {line.qty} {unitLabelOf(line)}
-                </ThemedText>
-                <ThemedText themeColor="textSecondary" style={styles.qtyText}>
-                  × {formatBs(line.unitPrice)}
-                </ThemedText>
-                <ThemedText themeColor="textSecondary" style={[styles.qtyText, styles.qtyAmount]}>
-                  {formatBs(line.qty * line.unitPrice)}
-                </ThemedText>
-              </View>
-            ))}
+            {/* Each unit type only appears when it was actually ordered, so a case-only
+                line does not show an empty loose-piece row. */}
+            {line.qtyMax > 0 ? (
+              <QtyRow qty={line.qtyMax} unitLabel={line.maxUnitLabel} unitPrice={line.unitPriceMax} />
+            ) : null}
+            {line.qtyMin > 0 ? (
+              <QtyRow qty={line.qtyMin} unitLabel={line.minUnitLabel} unitPrice={line.unitPriceMin} />
+            ) : null}
 
             <ThemedText themeColor="textSecondary" style={styles.lineMeta}>
-              ICE {formatBs(item.ice)}
+              ICE {formatBs(line.ice)}
             </ThemedText>
           </Pressable>
         ))
@@ -105,7 +109,7 @@ export function OrderPanel({
           <ThemedText themeColor="textSecondary" type="small">
             Productos
           </ThemedText>
-          <ThemedText type="small">{items.length}</ThemedText>
+          <ThemedText type="small">{lines.length}</ThemedText>
         </View>
         <View style={[styles.grandTotalRow, { borderTopColor: theme.border }]}>
           <ThemedText type="smallBold" style={styles.grandTotalLabel}>
@@ -147,14 +151,24 @@ export function OrderPanel({
         ) : null}
       </View>
 
+      {offline ? (
+        <View style={[styles.notice, { backgroundColor: theme.accentAltSoft }]}>
+          <Icon name="wifi.slash" size={14} color={theme.accentAlt} />
+          <ThemedText style={[styles.noticeText, { color: theme.accentAlt }]}>
+            Sin conexión no se pueden calcular descuentos ni bonificaciones. Guardá el pedido como
+            prepedido y aplicalos al sincronizar.
+          </ThemedText>
+        </View>
+      ) : null}
+
       {/* Discounts are resolved on the summary screen, which is also where the order
           is confirmed — nothing here commits the order. */}
       <Pressable
-        disabled={lines.length === 0}
+        disabled={continueDisabled}
         onPress={() => onContinue?.(paymentMethod)}
         style={[
           styles.continueButton,
-          { backgroundColor: theme.accent, opacity: lines.length === 0 ? 0.4 : 1 },
+          { backgroundColor: theme.accent, opacity: continueDisabled ? 0.4 : 1 },
         ]}>
         <Icon name="cash" size={15} color={theme.onAccent} />
         <ThemedText type="smallBold" style={[styles.buttonLabel, { color: theme.onAccent }]}>
@@ -163,6 +177,9 @@ export function OrderPanel({
         <Icon name="chevron.right" size={15} color={theme.onAccent} />
       </Pressable>
 
+      {/* Stays enabled offline on purpose — the draft is stored locally and synced
+          later, which is exactly what lets the seller keep taking orders with no
+          signal. Do not disable it alongside the button above. */}
       <Pressable
         onPress={handleSavePreorder}
         style={[styles.outlineButton, { borderColor: theme.border, backgroundColor: theme.backgroundElement }]}>
@@ -172,6 +189,23 @@ export function OrderPanel({
         </ThemedText>
       </Pressable>
     </ScrollView>
+  );
+}
+
+/** One ordered quantity with the price it was agreed at, so the amount stays verifiable. */
+function QtyRow({ qty, unitLabel, unitPrice }: { qty: number; unitLabel: string; unitPrice: number }) {
+  return (
+    <View style={styles.qtyRow}>
+      <ThemedText type="smallBold" style={styles.qtyText}>
+        {qty} {unitLabel}
+      </ThemedText>
+      <ThemedText themeColor="textSecondary" style={styles.qtyText}>
+        × {formatBs(unitPrice)}
+      </ThemedText>
+      <ThemedText themeColor="textSecondary" style={[styles.qtyText, styles.qtyAmount]}>
+        {formatBs(qty * unitPrice)}
+      </ThemedText>
+    </View>
   );
 }
 
@@ -202,6 +236,16 @@ const styles = StyleSheet.create({
   lineName: {
     flex: 1,
     fontSize: 12,
+  },
+  sizePill: {
+    flexShrink: 0,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: Radius.pill,
+  },
+  sizeText: {
+    fontSize: 9,
+    fontWeight: '700',
   },
   lineMeta: {
     fontSize: 10,
