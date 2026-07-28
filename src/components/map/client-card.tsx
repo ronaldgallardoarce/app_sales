@@ -10,6 +10,7 @@ import { OffRouteBadge } from '@/components/map/off-route-badge';
 import { VisitTimer } from '@/components/client/visit-timer';
 import { mockSeller } from '@/data/mock-user';
 import { useTheme, useThemeScheme } from '@/hooks/use-theme';
+import { formatBs } from '@/utils/currency';
 import { distanceKm, formatDistance } from '@/utils/geo';
 
 const WHATSAPP_GREEN = '#25D366';
@@ -76,7 +77,7 @@ export function ClientCard({
         <OffRouteBadge visitToday={client.visitToday} status={client.status} />
         <VisitTimer clientId={client.id} />
 
-        <MetaRow icon="person.fill" label="Propietario" value={`${client.code}-${client.owner}`} />
+        <MetaRow icon="person.fill" label="Propietario" value={`${client.ownerCode}-${client.owner}`} />
 
         <MetaRow
           icon="map"
@@ -93,8 +94,8 @@ export function ClientCard({
         />
 
         <View style={styles.statsRow}>
-          <StatChip icon="cash" label="Ticket" value={`Bs ${client.avgTicket}`} />
-          <StatChip icon="shippingbox.fill" label="Drop" value={`Bs ${client.dropSize}`} />
+          <StatChip icon="cash" label="Ticket" value={formatBs(client.avgTicket)} />
+          <StatChip icon="shippingbox.fill" label="Drop" value={formatBs(client.dropSize)} />
         </View>
 
         <View style={styles.footerRow}>

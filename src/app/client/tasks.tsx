@@ -4,6 +4,13 @@ import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import {
+  LowRotationForm,
+  ProductPickerView,
+  emptyLowRotation,
+  isExpiryValid,
+  type LowRotationValue,
+} from '@/components/client/low-rotation-form';
 import { VisitTimer } from '@/components/client/visit-timer';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
@@ -25,6 +32,15 @@ import { useTheme, useThemeScheme } from '@/hooks/use-theme';
 type TaskStatus = 'pendiente' | 'completada';
 type Filter = 'todas' | 'pendientes' | 'hechas';
 
+/**
+ * Which content the execution sheet shows. The product picker is a swap rather than a
+ * second sheet: this renders inside a `BottomSheet`, which is a `Modal`, so another
+ * sheet would be presented *below* the open one and never appear. The flag lives here
+ * and not in the form because the sheet footer — mounted outside the form — has to
+ * know that the seller is picking.
+ */
+type TaskSheetView = 'task' | 'product';
+
 /** Max photos allowed on a "foto" task. */
 const MAX_PHOTOS = 3;
 
@@ -34,10 +50,12 @@ type Draft = {
   text: string;
   checked: Record<string, boolean>;
   rating: number;
+  /** Owned by the form component, which is the only thing that reads its fields. */
+  lowRotation: LowRotationValue;
 };
 
 function emptyDraft(): Draft {
-  return { photos: [], text: '', checked: {}, rating: 0 };
+  return { photos: [], text: '', checked: {}, rating: 0, lowRotation: emptyLowRotation() };
 }
 
 const FILTERS: { key: Filter; label: string }[] = [
@@ -69,6 +87,7 @@ export default function ClientTasksScreen() {
   const [filter, setFilter] = useState<Filter>('todas');
   const [activeId, setActiveId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(emptyDraft);
+  const [sheetView, setSheetView] = useState<TaskSheetView>('task');
 
   const goBack = () => (router.canGoBack() ? router.back() : router.replace('/map' as Href));
 
@@ -104,6 +123,8 @@ export default function ClientTasksScreen() {
     // Seed the draft: re-open a completed task with a fresh sheet (mockup keeps
     // no persisted answer), otherwise start blank.
     setDraft(emptyDraft());
+    // A sheet left on the picker would open the next task showing a product list.
+    setSheetView('task');
     setActiveId(task.id);
   };
 
@@ -132,8 +153,9 @@ export default function ClientTasksScreen() {
             <ThemedText type="smallBold" style={styles.headerTitle}>
               Tareas
             </ThemedText>
+            {/* Owner: route-level context, matching every other screen header. */}
             <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-              {client.code}-{client.name}
+              {client.ownerCode}-{client.owner}
             </ThemedText>
           </View>
 
@@ -236,11 +258,20 @@ export default function ClientTasksScreen() {
               task={activeTask}
               draft={draft}
               completed={statusOf(activeTask.id) === 'completada'}
+              locked={sheetView !== 'task'}
               onPress={completeTask}
             />
           ) : null
         }>
-        {activeTask ? <TaskSheet task={activeTask} draft={draft} setDraft={setDraft} /> : null}
+        {activeTask ? (
+          <TaskSheet
+            task={activeTask}
+            draft={draft}
+            setDraft={setDraft}
+            view={sheetView}
+            onViewChange={setSheetView}
+          />
+        ) : null}
       </BottomSheet>
     </View>
   );
@@ -348,21 +379,48 @@ function TaskSheet({
   task,
   draft,
   setDraft,
+  view,
+  onViewChange,
 }: {
   task: SupervisorTask;
   draft: Draft;
   setDraft: React.Dispatch<React.SetStateAction<Draft>>;
+  view: TaskSheetView;
+  onViewChange: (view: TaskSheetView) => void;
 }) {
   const theme = useTheme();
   const accent = TASK_COLOR_META[task.color];
   const response = RESPONSE_META[task.responseType];
 
+  // Nothing of the task renders while picking — no header, chips, description or hint.
+  // Giving the picker the whole sheet is the reason for swapping instead of expanding
+  // the list inline.
+  if (view === 'product') {
+    return (
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.sheetScroll}>
+        <ProductPickerView
+          selectedId={draft.lowRotation.productId}
+          onSelect={(productId) =>
+            setDraft((d) => ({ ...d, lowRotation: { ...d.lowRotation, productId } }))
+          }
+          onBack={() => onViewChange('task')}
+        />
+      </ScrollView>
+    );
+  }
+
   return (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.sheetScroll}>
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+      contentContainerStyle={styles.sheetScroll}>
       {/* Header */}
       <View style={styles.sheetHeader}>
         <View style={[styles.sheetIcon, { backgroundColor: theme[accent.soft] }]}>
-          <Icon name={response.icon} size={22} color={theme[accent.color]} />
+          <Icon name={response.icon} size={18} color={theme[accent.color]} />
         </View>
         <View style={styles.sheetHeaderText}>
           <ThemedText type="smallBold" style={styles.sheetTitle}>
@@ -425,6 +483,14 @@ function TaskSheet({
         />
       ) : task.responseType === 'checklist' ? (
         <ChecklistInput task={task} draft={draft} setDraft={setDraft} />
+      ) : task.responseType === 'baja-rotacion' ? (
+        <LowRotationForm
+          value={draft.lowRotation}
+          onChange={(patch) => setDraft((d) => ({ ...d, lowRotation: { ...d.lowRotation, ...patch } }))}
+          photos={draft.photos}
+          onPhotosChange={(photos) => setDraft((d) => ({ ...d, photos }))}
+          onOpenProductPicker={() => onViewChange('product')}
+        />
       ) : (
         <RatingInput value={draft.rating} onChange={(rating) => setDraft((d) => ({ ...d, rating }))} />
       )}
@@ -508,6 +574,20 @@ function isDraftComplete(task: SupervisorTask, draft: Draft): boolean {
       return Object.values(draft.checked).some(Boolean);
     case 'calificacion':
       return draft.rating > 0;
+    case 'baja-rotacion': {
+      // Every field of the record matters: a product with no lot or no expiry is not a
+      // half-filled record, it is an unusable one.
+      const { productId, expiry, lot, qty } = draft.lowRotation;
+      return (
+        productId !== null &&
+        // The strict check, not just "ten characters typed": the form already warns that
+        // 31/02 is not a date, and the gate has to agree with the warning.
+        isExpiryValid(expiry) &&
+        lot !== null &&
+        qty > 0 &&
+        draft.photos.length > 0
+      );
+    }
   }
 }
 
@@ -515,15 +595,22 @@ function CompleteButton({
   task,
   draft,
   completed,
+  locked,
   onPress,
 }: {
   task: SupervisorTask;
   draft: Draft;
   completed: boolean;
+  /** The sheet is showing something other than the task — see `locked` below. */
+  locked: boolean;
   onPress: () => void;
 }) {
   const theme = useTheme();
-  const canComplete = !task.required || isDraftComplete(task, draft);
+  // The footer is the sheet's, so it stays mounted over the product picker. Without
+  // `locked`, an optional task (or one whose draft is already valid) could be completed
+  // from a view that is not showing the task at all, and the button would read as the
+  // way to confirm the product.
+  const canComplete = !locked && (!task.required || isDraftComplete(task, draft));
 
   return (
     <Pressable
@@ -606,12 +693,12 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: Spacing.three,
     paddingTop: Spacing.two,
-    gap: Spacing.two,
+    gap: 6,
   },
   summaryCard: {
     borderRadius: Radius.md,
     borderWidth: 1,
-    paddingHorizontal: Spacing.three,
+    paddingHorizontal: Spacing.two,
     paddingVertical: Spacing.two,
     gap: 6,
   },
@@ -663,13 +750,15 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.six,
   },
   taskCard: {
-    borderRadius: Radius.lg,
+    // md, not lg: the tighter body below would look swollen inside a wider corner.
+    borderRadius: Radius.md,
     borderWidth: 1,
     overflow: 'hidden',
   },
   taskBody: {
-    padding: Spacing.three,
-    gap: Spacing.two,
+    paddingVertical: 8,
+    paddingHorizontal: Spacing.two,
+    gap: 6,
   },
   taskTop: {
     flexDirection: 'row',
@@ -693,7 +782,7 @@ const styles = StyleSheet.create({
   chipsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 5,
+    gap: 4,
   },
   chip: {
     flexDirection: 'row',
@@ -716,10 +805,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.four,
   },
   sheetScroll: {
-    paddingHorizontal: Spacing.four,
+    // Spacing.three is the gutter every other screen and sheet uses.
+    paddingHorizontal: Spacing.three,
     paddingTop: Spacing.two,
-    paddingBottom: Spacing.three,
-    gap: Spacing.two,
+    // Small: the footer's own top padding already separates the content from the
+    // button, so a full Spacing.three here just doubled that gap.
+    paddingBottom: Spacing.one,
+    gap: 6,
   },
   sheetHeader: {
     flexDirection: 'row',
@@ -727,8 +819,8 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   sheetIcon: {
-    width: 44,
-    height: 44,
+    width: 36,
+    height: 36,
     borderRadius: Radius.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -738,29 +830,34 @@ const styles = StyleSheet.create({
     gap: 1,
   },
   sheetTitle: {
-    fontSize: 17,
+    fontSize: 15,
+    // Explicit alongside every reduced font size here: the `small` / `smallBold` types
+    // carry lineHeight 20, so a smaller font on its own keeps the old row height.
+    lineHeight: 19,
   },
   sheetDescription: {
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: 13,
+    lineHeight: 18,
   },
   hintRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    padding: Spacing.two,
-    borderRadius: Radius.md,
+    paddingVertical: 6,
+    paddingHorizontal: Spacing.two,
+    borderRadius: Radius.sm,
   },
   hintText: {
     flex: 1,
-    fontSize: 12,
+    fontSize: 11,
+    lineHeight: 14,
   },
   textArea: {
-    minHeight: 110,
+    minHeight: 88,
     borderRadius: Radius.md,
     borderWidth: 1,
-    padding: Spacing.three,
-    fontSize: 14,
+    padding: Spacing.two,
+    fontSize: 13,
     textAlignVertical: 'top',
   },
   inputGroup: {
@@ -770,13 +867,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
-    padding: Spacing.three,
-    borderRadius: Radius.md,
+    paddingVertical: 8,
+    paddingHorizontal: Spacing.two,
+    borderRadius: Radius.sm,
     borderWidth: 1,
   },
   checkbox: {
-    width: 22,
-    height: 22,
+    width: 20,
+    height: 20,
     borderRadius: 6,
     borderWidth: 2,
     alignItems: 'center',

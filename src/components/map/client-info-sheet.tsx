@@ -8,6 +8,7 @@ import { CHANNEL_META, STATUS_META, type MapClient } from '@/data/mock-clients';
 import { OffRouteBadge } from '@/components/map/off-route-badge';
 import { VisitTimer } from '@/components/client/visit-timer';
 import { useTheme } from '@/hooks/use-theme';
+import { formatBs } from '@/utils/currency';
 
 export function ClientInfoSheet({
   client,
@@ -88,8 +89,8 @@ export function ClientInfoSheet({
             <InfoRow icon="mappin" label="Dirección" value={client.address} />
             <InfoRow icon="map" label="Ruta" value={client.route} />
             <InfoRow icon="tag.fill" label="Canal" value={CHANNEL_META[client.channel].label} />
-            <InfoRow icon="cash" label="Ticket prom." value={`Bs ${client.avgTicket}`} />
-            <InfoRow icon="shippingbox.fill" label="Drop size" value={`Bs ${client.dropSize}`} />
+            <InfoRow icon="cash" label="Ticket prom." value={formatBs(client.avgTicket)} />
+            <InfoRow icon="shippingbox.fill" label="Drop size" value={formatBs(client.dropSize)} />
           </View>
         </View>
       ) : null}

@@ -30,6 +30,7 @@ export const Colors = {
     border: '#E6E8EC',
     danger: '#C1443A',
     dangerSoft: '#F9E1DF',
+    onDanger: '#FFFFFF',
   },
   dark: {
     text: '#F5F6F7',
@@ -53,6 +54,7 @@ export const Colors = {
     border: '#2A2C30',
     danger: '#E07168',
     dangerSoft: '#3A211E',
+    onDanger: '#1C0E0C',
   },
 } as const;
 

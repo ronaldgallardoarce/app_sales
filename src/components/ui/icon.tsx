@@ -48,6 +48,7 @@ const GLYPHS = {
   smartphone: 'cellphone',
   'list.bullet': 'format-list-bulleted',
   mappin: 'map-marker',
+  store: 'store-outline',
   'mappin.slash': 'map-marker-off',
   'person.fill': 'account',
   polygon: 'vector-polygon',

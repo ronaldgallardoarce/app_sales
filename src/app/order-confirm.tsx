@@ -8,9 +8,11 @@ import { DeliveryPointSheet } from '@/components/order/delivery-point-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { useDialog } from '@/components/ui/dialog';
 import { Icon, type IconName } from '@/components/ui/icon';
+import { OfflineBadge } from '@/components/ui/offline-badge';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
 import { useClientVisits } from '@/context/client-visit-context';
+import { useConnectivity } from '@/context/connectivity-context';
 import { calculateIncentives, PAYMENT_METHODS, type PaymentMethod } from '@/data/mock-incentives';
 import {
   deliveryDateOptions,
@@ -23,7 +25,7 @@ import {
 import { mockSeller } from '@/data/mock-user';
 import { useContentInsets } from '@/hooks/use-content-insets';
 import { useTheme } from '@/hooks/use-theme';
-import { groupIntoItems, iceTotalOf, unitLabelOf } from '@/utils/order';
+import { iceTotalOf, lineAmount } from '@/utils/order';
 import { formatBs } from '@/utils/currency';
 
 export default function OrderConfirmScreen() {
@@ -33,6 +35,7 @@ export default function OrderConfirmScreen() {
   const insets = useContentInsets();
   const { clients, markOrder } = useClientVisits();
   const { lines, clearCart, totalAmount } = useCart();
+  const { offline } = useConnectivity();
 
   const { clientId, paymentMethod: paymentParam } = useLocalSearchParams<{
     clientId?: string;
@@ -55,8 +58,7 @@ export default function OrderConfirmScreen() {
   const [fromHour, setFromHour] = useState<string>(DELIVERY_HOURS[0]);
   const [toHour, setToHour] = useState<string>(DELIVERY_HOURS[2]);
 
-  const items = useMemo(() => groupIntoItems(lines), [lines]);
-  const iceTotal = useMemo(() => iceTotalOf(items), [items]);
+  const iceTotal = useMemo(() => iceTotalOf(lines), [lines]);
   const incentives = useMemo(
     () => calculateIncentives(paymentMethod, totalAmount),
     [paymentMethod, totalAmount],
@@ -64,6 +66,10 @@ export default function OrderConfirmScreen() {
 
   const discountAmount = (totalAmount * incentives.discountPct) / 100;
   const finalTotal = totalAmount - discountAmount;
+
+  // Confirming registers the order, so it needs a connection; the prepedido saved
+  // from the catalog panel is the offline path.
+  const confirmDisabled = lines.length === 0 || offline;
 
   const goBack = () => (router.canGoBack() ? router.back() : router.replace('/map' as Href));
 
@@ -121,9 +127,12 @@ export default function OrderConfirmScreen() {
               Confirmar pedido
             </ThemedText>
             <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-              {client ? `${client.code} · ${client.name}` : 'Sin cliente'}
+              {/* Owner: route-level context, matching every other screen header. */}
+              {client ? `${client.ownerCode}-${client.owner}` : 'Sin cliente'}
             </ThemedText>
           </View>
+
+          <OfflineBadge />
 
           {clientId ? <VisitTimer clientId={clientId} compact /> : null}
         </View>
@@ -148,50 +157,51 @@ export default function OrderConfirmScreen() {
         </View>
 
         <SectionLabel>Detalle del pedido</SectionLabel>
-        {items.length === 0 ? (
+        {lines.length === 0 ? (
           <View style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
             <ThemedText themeColor="textSecondary" style={styles.emptyText}>
               El pedido no tiene productos.
             </ThemedText>
           </View>
         ) : (
-          items.map((item) => {
-            const itemDiscount = (item.subtotal * incentives.discountPct) / 100;
+          lines.map((line) => {
+            const amount = lineAmount(line);
+            const lineDiscount = (amount * incentives.discountPct) / 100;
             return (
               <View
-                key={item.sku}
+                key={String(line.productId)}
                 style={[styles.itemCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
                 <View style={styles.itemTop}>
                   <ThemedText type="smallBold" numberOfLines={1} style={styles.itemName}>
-                    {item.productName}
-                    {item.flavor ? ` · ${item.flavor}` : ''}
+                    {line.productName}
                   </ThemedText>
+                  {line.sizeLabel ? (
+                    <View style={[styles.sizePill, { backgroundColor: theme.backgroundSelected }]}>
+                      <ThemedText style={[styles.sizeText, { color: theme.textSecondary }]}>
+                        {line.sizeLabel}
+                      </ThemedText>
+                    </View>
+                  ) : null}
                   <ThemedText style={[styles.itemAmount, { color: theme.success }]} numberOfLines={1}>
-                    {formatBs(item.subtotal - itemDiscount)}
+                    {formatBs(amount - lineDiscount)}
                   </ThemedText>
                 </View>
 
-                {item.lines.map((line) => (
-                  <View key={line.id} style={styles.qtyRow}>
-                    <ThemedText type="smallBold" style={styles.qtyText}>
-                      {line.qty} {unitLabelOf(line)}
-                    </ThemedText>
-                    <ThemedText themeColor="textSecondary" style={styles.qtyText}>
-                      × {formatBs(line.unitPrice)}
-                    </ThemedText>
-                    <ThemedText themeColor="textSecondary" style={[styles.qtyText, styles.qtyAmount]}>
-                      {formatBs(line.qty * line.unitPrice)}
-                    </ThemedText>
-                  </View>
-                ))}
+                {/* Each unit type only appears when it was actually ordered. */}
+                {line.qtyMax > 0 ? (
+                  <QtyRow qty={line.qtyMax} unitLabel={line.maxUnitLabel} unitPrice={line.unitPriceMax} />
+                ) : null}
+                {line.qtyMin > 0 ? (
+                  <QtyRow qty={line.qtyMin} unitLabel={line.minUnitLabel} unitPrice={line.unitPriceMin} />
+                ) : null}
 
                 <View style={styles.itemFooter}>
                   <ThemedText themeColor="textSecondary" style={styles.metaLabel}>
-                    ICE {formatBs(item.ice)}
+                    ICE {formatBs(line.ice)}
                   </ThemedText>
-                  {itemDiscount > 0 ? (
+                  {lineDiscount > 0 ? (
                     <ThemedText style={[styles.metaLabel, { color: theme.accent }]}>
-                      Desc. {incentives.discountPct}% −{formatBs(itemDiscount)}
+                      Desc. {incentives.discountPct}% −{formatBs(lineDiscount)}
                     </ThemedText>
                   ) : null}
                 </View>
@@ -202,7 +212,7 @@ export default function OrderConfirmScreen() {
 
         {/* Totals — the discount the previous screen sent us to calculate. */}
         <View style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-          <TotalRow label="Productos" value={String(items.length)} />
+          <TotalRow label="Productos" value={String(lines.length)} />
           <TotalRow label="ICE" value={formatBs(iceTotal)} />
           <TotalRow label="Pago" value={paymentMethod} />
           <TotalRow label="Subtotal" value={formatBs(totalAmount)} />
@@ -336,12 +346,22 @@ export default function OrderConfirmScreen() {
           />
         </View>
 
+        {offline ? (
+          <View style={[styles.notice, { backgroundColor: theme.accentAltSoft }]}>
+            <Icon name="wifi.slash" size={14} color={theme.accentAlt} />
+            <ThemedText style={[styles.noticeText, { color: theme.accentAlt }]}>
+              Sin conexión no se puede confirmar el pedido. Volvé a intentarlo al recuperar la
+              señal.
+            </ThemedText>
+          </View>
+        ) : null}
+
         <Pressable
-          disabled={items.length === 0}
+          disabled={confirmDisabled}
           onPress={confirm}
           style={[
             styles.confirmButton,
-            { backgroundColor: theme.success, opacity: items.length === 0 ? 0.4 : 1 },
+            { backgroundColor: theme.success, opacity: confirmDisabled ? 0.4 : 1 },
           ]}>
           <Icon name="cart" size={16} color={theme.onSuccess} />
           <ThemedText type="smallBold" style={{ color: theme.onSuccess }}>
@@ -366,6 +386,23 @@ function SectionLabel({ children }: { children: string }) {
     <ThemedText type="smallBold" themeColor="textSecondary" style={styles.sectionLabel}>
       {children}
     </ThemedText>
+  );
+}
+
+/** One ordered quantity with the price it was agreed at, so the amount stays verifiable. */
+function QtyRow({ qty, unitLabel, unitPrice }: { qty: number; unitLabel: string; unitPrice: number }) {
+  return (
+    <View style={styles.qtyRow}>
+      <ThemedText type="smallBold" style={styles.qtyText}>
+        {qty} {unitLabel}
+      </ThemedText>
+      <ThemedText themeColor="textSecondary" style={styles.qtyText}>
+        × {formatBs(unitPrice)}
+      </ThemedText>
+      <ThemedText themeColor="textSecondary" style={[styles.qtyText, styles.qtyAmount]}>
+        {formatBs(qty * unitPrice)}
+      </ThemedText>
+    </View>
   );
 }
 
@@ -530,6 +567,16 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
   },
+  sizePill: {
+    flexShrink: 0,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: Radius.pill,
+  },
+  sizeText: {
+    fontSize: 9,
+    fontWeight: '700',
+  },
   itemAmount: {
     fontSize: 12,
     fontWeight: '700',
@@ -681,5 +728,21 @@ const styles = StyleSheet.create({
     height: ControlHeight.input,
     borderRadius: Radius.md,
     marginTop: Spacing.two,
+  },
+  // Same idiom as the order panel's notices, so a blocked action reads the same
+  // wherever the seller meets it.
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    marginTop: Spacing.two,
+    padding: Spacing.two,
+    borderRadius: Radius.sm,
+  },
+  noticeText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '600',
   },
 });

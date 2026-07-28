@@ -13,6 +13,7 @@ import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { DialogProvider } from '@/components/ui/dialog';
 import { CartProvider } from '@/context/cart-context';
 import { ClientVisitProvider } from '@/context/client-visit-context';
+import { ConnectivityProvider } from '@/context/connectivity-context';
 import { ThemeSchemeProvider, useThemeSchemeContext } from '@/context/theme-scheme-context';
 import { AndroidImmersiveNavBar, Colors } from '@/constants/theme';
 
@@ -54,6 +55,8 @@ function RootNavigation() {
 
   return (
     <ThemeProvider value={scheme === 'dark' ? DarkTheme : DefaultTheme}>
+      {/* Connectivity is ambient — it depends on neither the cart nor the visit. */}
+      <ConnectivityProvider>
       <CartProvider>
         <ClientVisitProvider>
         <DialogProvider>
@@ -95,6 +98,7 @@ function RootNavigation() {
         </DialogProvider>
         </ClientVisitProvider>
       </CartProvider>
+      </ConnectivityProvider>
     </ThemeProvider>
   );
 }

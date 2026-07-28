@@ -83,9 +83,11 @@ export function BottomSheet({
             styles.sheet,
             {
               backgroundColor: theme.backgroundElement,
-              // insets.bottom keeps content clear of the nav bar / home indicator;
-              // only a small breathing gap is added on top of it.
-              paddingBottom: insets.bottom + Spacing.two,
+              // insets.bottom keeps content clear of the nav bar / home indicator; the
+              // gap on top of it is deliberately minimal, because whatever sits at the
+              // bottom of a sheet (usually a footer button) already carries its own
+              // padding. Anything larger here reads as dead space under the button.
+              paddingBottom: insets.bottom + Spacing.one,
               maxHeight: maxHeight ?? SCREEN_HEIGHT * 0.88,
               transform: [{ translateY }],
             },
@@ -137,6 +139,7 @@ const styles = StyleSheet.create({
     // with the content above them instead of being inset further.
     paddingHorizontal: Spacing.three,
     paddingTop: Spacing.two,
-    gap: Spacing.two,
+    // No `gap`: the footer only ever holds one child (a button or a row of them, which
+    // spaces itself), so a gap here spaced nothing while implying it did.
   },
 });

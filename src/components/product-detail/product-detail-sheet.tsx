@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { QuantityStepper } from '@/components/product-detail/quantity-stepper';
-import { VariantChip } from '@/components/product-detail/variant-chip';
+import { SuggestionCard } from '@/components/product-detail/suggestion-card';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { Icon } from '@/components/ui/icon';
@@ -11,336 +11,438 @@ import { useCart } from '@/context/cart-context';
 import { useTheme } from '@/hooks/use-theme';
 import { CartLine, Product } from '@/types/catalog';
 import { formatBs } from '@/utils/currency';
+import { lineAmount, lineMinUnits, lineQtyLabel } from '@/utils/order';
+import { AXIS_LABELS, availableAxes, primaryAxis, suggestionsFor } from '@/utils/suggestions';
+
+/** Quantities the seller has typed but not confirmed, per product code. */
+type DraftEntry = { qtyMin: number; qtyMax: number };
+
+/**
+ * Which content the sheet shows. Both views live in the one BottomSheet on purpose:
+ * a second sheet would mean nesting modals, and they share the draft and the footer
+ * so the seller can type quantities in either view and confirm once.
+ */
+type SheetView = 'detail' | 'related';
 
 export function ProductDetailSheet({
   product,
+  catalog,
   onClose,
   editLine = null,
 }: {
   product: Product | null;
+  /** Every product the suggestions can reach — siblings live in the catalog, not in the product. */
+  catalog: Product[];
   onClose: () => void;
   /**
-   * Cart line the sheet should open ready to edit. Its quantity is loaded into
-   * the stepper and the line is pulled out of the cart, so confirming re-adds it
-   * with the new amount instead of stacking a second line.
+   * Cart line the sheet was opened to edit. It only identifies the opening: quantities
+   * are read straight from the cart, so nothing has to be lifted out of it.
    */
   editLine?: CartLine | null;
 }) {
   const theme = useTheme();
   const cart = useCart();
   const [displayProduct, setDisplayProduct] = useState<Product | null>(product);
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [cajaQty, setCajaQty] = useState(0);
-  const [unidadQty, setUnidadQty] = useState(0);
-  const lastIdRef = useRef<string | null>(null);
-  const lastEditIdRef = useRef<string | null>(null);
-  /**
-   * Lines lifted out of the cart to be edited. `addLines` sums quantities for the
-   * same id, so a line has to leave the cart before its amount is re-entered —
-   * which means dismissing without confirming has to put it back, or the seller
-   * loses a line just by opening and cancelling.
-   */
-  const pulledLinesRef = useRef<CartLine[]>([]);
+  // A Map, not a plain object: object keys coerce to strings, which would quietly
+  // turn every numeric product code into a lookup that never matches the catalog.
+  const [draft, setDraft] = useState<Map<number, DraftEntry>>(new Map());
+  const [focusId, setFocusId] = useState<number | null>(product?.id ?? null);
+  const [view, setView] = useState<SheetView>('detail');
+  const openingRef = useRef<string | null>(null);
+
+  const catalogById = useMemo(() => new Map(catalog.map((p) => [p.id, p])), [catalog]);
+
+  /** A product's current cart quantities, which is where every draft entry starts. */
+  const draftFromCart = useCallback(
+    (productId: number): DraftEntry => {
+      const line = cart.lines.find((l) => l.productId === productId);
+      return { qtyMax: line?.qtyMax ?? 0, qtyMin: line?.qtyMin ?? 0 };
+    },
+    [cart.lines],
+  );
 
   useEffect(() => {
-    if (!product) return;
-    setDisplayProduct(product);
-
-    if (product.id !== lastIdRef.current) {
-      lastIdRef.current = product.id;
-      setSelectedIndex(0);
-      setCajaQty(0);
-      setUnidadQty(0);
-    }
-
-    if (!editLine) {
-      lastEditIdRef.current = null;
+    if (!product) {
+      openingRef.current = null;
       return;
     }
-    // Guard on the line id: the effect re-runs when removeLine updates the cart,
-    // and preloading twice would double the quantity.
-    if (editLine.id === lastEditIdRef.current) return;
-    lastEditIdRef.current = editLine.id;
+    setDisplayProduct(product);
+    // The draft is scratch space for one opening, so it is rebuilt from the cart each
+    // time the sheet is opened — and only then, or typing would be wiped on every
+    // cart change. Whether an existing line was the entry point takes part in the key,
+    // so arriving from the order panel counts as a new opening.
+    const opening = `${product.id}|${editLine?.productId ?? ''}`;
+    if (openingRef.current === opening) return;
+    openingRef.current = opening;
+    setFocusId(product.id);
+    setView('detail');
+    setDraft(new Map([[product.id, draftFromCart(product.id)]]));
+  }, [product, editLine, draftFromCart]);
 
-    const variantIndex = product.variants.findIndex((v) => v.sku === editLine.sku);
-    setSelectedIndex(variantIndex >= 0 ? variantIndex : 0);
-    setCajaQty(editLine.unit === 'CAJA' ? editLine.qty : 0);
-    setUnidadQty(editLine.unit === 'UNIDAD' ? editLine.qty : 0);
-    pulledLinesRef.current.push(editLine);
-    cart.removeLine(editLine.id);
-  }, [product, editLine, cart]);
+  // Compared against null rather than tested for truthiness: product codes are numbers
+  // now, and a truthy check would treat a legitimate code of 0 as "nothing focused".
+  const focusProduct = (focusId !== null ? catalogById.get(focusId) : null) ?? displayProduct;
 
-  const hasVariants = (displayProduct?.variants.length ?? 0) > 1;
-  const currentVariant = displayProduct?.variants[Math.min(selectedIndex, displayProduct.variants.length - 1)];
-
-  const existingLines = useMemo(
-    () => (displayProduct ? cart.lines.filter((l) => l.productId === displayProduct.id) : []),
-    [cart.lines, displayProduct],
+  // Only the inline strip needs a single axis; the related view lists them all, so
+  // nothing has to remember which one the seller last looked at.
+  const inlineAxis = useMemo(
+    () => (focusProduct ? primaryAxis(focusProduct, catalog) : null),
+    [focusProduct, catalog],
+  );
+  const suggestions = useMemo(
+    () => (focusProduct && inlineAxis ? suggestionsFor(focusProduct, catalog, inlineAxis) : []),
+    [focusProduct, catalog, inlineAxis],
+  );
+  // Every axis with siblings, grouped for the related view. availableAxes already drops
+  // the empty ones, so each section here is guaranteed to have rows.
+  const relatedSections = useMemo(
+    () =>
+      focusProduct
+        ? availableAxes(focusProduct, catalog).map((axis) => ({
+            axis,
+            products: suggestionsFor(focusProduct, catalog, axis),
+          }))
+        : [],
+    [focusProduct, catalog],
   );
 
-  const pendingSubtotal = useMemo(
-    () => (currentVariant ? cajaQty * currentVariant.priceCaja + unidadQty * currentVariant.priceUnidad : 0),
-    [currentVariant, cajaQty, unidadQty],
+  const buildLine = useCallback(
+    (target: Product, entry: DraftEntry): CartLine => ({
+      productId: target.id,
+      productName: target.name,
+      flavor: target.flavor,
+      sizeLabel: target.sizeLabel,
+      minUnitLabel: target.minUnit,
+      maxUnitLabel: target.maxUnit,
+      qtyMax: entry.qtyMax,
+      qtyMin: entry.qtyMin,
+      unitPriceMax: target.priceCaja,
+      unitPriceMin: target.priceUnidad,
+      ice: target.ice,
+      unitsPerCase: target.unitsPerCase,
+    }),
+    [],
   );
-  const pendingUnits = useMemo(
-    () => (currentVariant ? cajaQty * currentVariant.unitsPerCase + unidadQty : 0),
-    [currentVariant, cajaQty, unidadQty],
-  );
-  const hasPending = cajaQty > 0 || unidadQty > 0;
 
-  const buildPendingLines = (): CartLine[] => {
-    if (!displayProduct || !currentVariant) return [];
-    const shared = {
-      productId: displayProduct.id,
-      productName: displayProduct.name,
-      flavor: currentVariant.flavor,
-      sku: currentVariant.sku,
-      ice: currentVariant.ice,
-      unitsPerCase: currentVariant.unitsPerCase,
-      minUnitLabel: displayProduct.minUnit ?? 'Unidad',
-      maxUnitLabel: displayProduct.maxUnit ?? 'Caja',
-    };
-    const lines: CartLine[] = [];
-    if (cajaQty > 0) {
-      lines.push({
-        ...shared,
-        id: `${currentVariant.sku}-CAJA`,
-        unit: 'CAJA',
-        qty: cajaQty,
-        unitPrice: currentVariant.priceCaja,
-      });
+  /** Only the drafted products that carry a quantity — what the order will actually get. */
+  const draftedLines = useMemo(() => {
+    const result: CartLine[] = [];
+    for (const [id, entry] of draft) {
+      if (entry.qtyMax === 0 && entry.qtyMin === 0) continue;
+      const target = catalogById.get(id) ?? (displayProduct?.id === id ? displayProduct : null);
+      if (target) result.push(buildLine(target, entry));
     }
-    if (unidadQty > 0) {
-      lines.push({
-        ...shared,
-        id: `${currentVariant.sku}-UNIDAD`,
-        unit: 'UNIDAD',
-        qty: unidadQty,
-        unitPrice: currentVariant.priceUnidad,
-      });
-    }
-    return lines;
+    return result;
+  }, [draft, catalogById, displayProduct, buildLine]);
+
+  /**
+   * Whether the draft says anything the cart does not. A quantity check alone would be
+   * wrong: dropping a product to zero is a real change and has to stay confirmable, or
+   * the sheet can add a line but never take one away.
+   */
+  const hasChanges = useMemo(
+    () =>
+      Array.from(draft).some(([id, entry]) => {
+        const current = cart.lines.find((l) => l.productId === id);
+        return entry.qtyMax !== (current?.qtyMax ?? 0) || entry.qtyMin !== (current?.qtyMin ?? 0);
+      }),
+    [draft, cart.lines],
+  );
+  /**
+   * A removal only when the draft is empty AND differs from the cart, i.e. a quantity
+   * was actually cleared. An empty draft alone is just a freshly opened sheet, which
+   * must still read "Agregar al pedido" rather than offering to remove nothing.
+   */
+  const isRemoval = hasChanges && draftedLines.length === 0;
+
+  const focusEntry = focusProduct ? (draft.get(focusProduct.id) ?? { qtyMax: 0, qtyMin: 0 }) : null;
+  const focusLine = focusProduct && focusEntry ? buildLine(focusProduct, focusEntry) : null;
+  const hasFocusQty = !!focusEntry && (focusEntry.qtyMax > 0 || focusEntry.qtyMin > 0);
+
+  const setFocusQty = (key: keyof DraftEntry, qty: number) => {
+    if (!focusProduct) return;
+    setDraft((prev) => {
+      const next = new Map(prev);
+      // Seeded from the cart rather than from zero, so touching one unit never wipes a
+      // quantity the other unit already carries.
+      next.set(focusProduct.id, { ...(prev.get(focusProduct.id) ?? draftFromCart(focusProduct.id)), [key]: qty });
+      return next;
+    });
   };
 
-  const commitPending = () => {
-    const lines = buildPendingLines();
-    if (lines.length === 0) return;
-    cart.addLines(lines);
-    // The pulled amounts are back in the cart — nothing left to restore.
-    pulledLinesRef.current = [];
-    setCajaQty(0);
-    setUnidadQty(0);
+  /** Moving to a sibling keeps the draft: the previous product's quantities stay staged. */
+  const focusSuggestion = (next: Product) => {
+    setDraft((prev) => (prev.has(next.id) ? prev : new Map(prev).set(next.id, draftFromCart(next.id))));
+    setFocusId(next.id);
   };
 
-  const selectVariant = (index: number) => {
-    if (index === selectedIndex) return;
-    commitPending();
-    setSelectedIndex(index);
+  /** Picking from the related view: focus the product and return to where quantities are typed. */
+  const pickSuggestion = (next: Product) => {
+    focusSuggestion(next);
+    setView('detail');
   };
 
-  const editExistingLine = (line: CartLine) => {
-    if (!displayProduct) return;
-    const idx = displayProduct.variants.findIndex((v) => v.sku === line.sku);
-    const isSameVariant = idx === selectedIndex;
-    const pendingSameUnit = isSameVariant ? (line.unit === 'CAJA' ? cajaQty : unidadQty) : 0;
-    if (!isSameVariant) commitPending();
-    if (idx >= 0) setSelectedIndex(idx);
-    const nextQty = line.qty + pendingSameUnit;
-    if (line.unit === 'CAJA') setCajaQty(nextQty);
-    else setUnidadQty(nextQty);
-    pulledLinesRef.current.push(line);
-    cart.removeLine(line.id);
+  const clearDraftEntry = (productId: number) => {
+    setDraft((prev) => new Map(prev).set(productId, { qtyMax: 0, qtyMin: 0 }));
   };
 
-  const handleAddToOrder = () => {
-    commitPending();
-    // Confirming with the steppers at zero means the seller cleared the line on
-    // purpose, so it must not come back.
-    pulledLinesRef.current = [];
+  const handleConfirm = () => {
+    // Every drafted product is sent, zeros included: an absolute upsert is what lets a
+    // quantity dropped to zero remove its line instead of silently staying behind.
+    const lines = Array.from(draft, ([id, entry]) => {
+      const target = catalogById.get(id) ?? (displayProduct?.id === id ? displayProduct : null);
+      return target ? buildLine(target, entry) : null;
+    }).filter((line): line is CartLine => line !== null);
+    cart.upsertLines(lines);
     onClose();
   };
 
-  /** Dismissal without confirming: whatever was lifted out goes back untouched. */
-  const handleDismiss = () => {
-    if (pulledLinesRef.current.length > 0) {
-      cart.addLines(pulledLinesRef.current);
-      pulledLinesRef.current = [];
-    }
-    onClose();
+  if (!focusProduct) return null;
+
+  const isInOrder = (productId: number) => {
+    const entry = draft.get(productId) ?? draftFromCart(productId);
+    return entry.qtyMax > 0 || entry.qtyMin > 0;
   };
-
-  if (!displayProduct || !currentVariant) return null;
-
-  // Packaging names fall back to the generic terms when a product doesn't define them.
-  const minUnitLabel = displayProduct.minUnit ?? 'Unidad';
-  const maxUnitLabel = displayProduct.maxUnit ?? 'Caja';
 
   return (
     <BottomSheet
       visible={!!product}
-      onClose={handleDismiss}
+      onClose={onClose}
       footer={
         <View style={styles.footerRow}>
-          <Pressable onPress={handleDismiss} style={[styles.cancelButton, { borderColor: theme.border }]}>
+          <Pressable onPress={onClose} style={[styles.cancelButton, { borderColor: theme.border }]}>
             <ThemedText type="smallBold">Cancelar</ThemedText>
           </Pressable>
           <Pressable
-            disabled={!hasPending}
-            onPress={handleAddToOrder}
-            style={[styles.addButton, { backgroundColor: theme.success, opacity: hasPending ? 1 : 0.4 }]}>
-            <Icon name="cart" size={16} color={theme.onSuccess} />
-            <ThemedText style={[styles.addButtonText, { color: theme.onSuccess }]}>Agregar al pedido</ThemedText>
+            disabled={!hasChanges}
+            onPress={handleConfirm}
+            style={[
+              styles.addButton,
+              { backgroundColor: isRemoval ? theme.danger : theme.success, opacity: hasChanges ? 1 : 0.4 },
+            ]}>
+            <Icon name={isRemoval ? 'trash' : 'cart'} size={16} color={isRemoval ? theme.onDanger : theme.onSuccess} />
+            <ThemedText
+              style={[styles.addButtonText, { color: isRemoval ? theme.onDanger : theme.onSuccess }]}>
+              {isRemoval ? 'Quitar del pedido' : 'Agregar al pedido'}
+            </ThemedText>
           </Pressable>
         </View>
       }>
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-        {/* <View style={styles.topRow}>
-          <View style={[styles.codePill, { backgroundColor: theme.backgroundSelected }]}>
-            <ThemedText style={[styles.codePillText, { color: theme.textSecondary }]}>
-              Código: {currentVariant.sku}
-            </ThemedText>
-          </View>
-          <View
-            style={[
-              styles.stockPill,
-              { backgroundColor: displayProduct.inStock ? theme.successSoft : theme.backgroundSelected },
-            ]}>
-            <ThemedText
-              style={[styles.stockPillText, { color: displayProduct.inStock ? theme.success : theme.textSecondary }]}>
-              {displayProduct.inStock ? 'En stock' : 'Agotado'}
-            </ThemedText>
-          </View>
-        </View> */}
-
-        <ThemedText type="subtitle" style={styles.title}>
-          {displayProduct.name}
-        </ThemedText>
-
-        <View style={[styles.infoCard, { backgroundColor: theme.background }]}>
-          {/* <View style={styles.infoTopRow}>
-            <InfoStat label="Precio de venta" value={formatBs(currentVariant.priceUnidad)} color={theme.accent} />
-            <InfoStat label="Utilidad" value={`${currentVariant.utilidadPct}%`} color={theme.success} />
-          </View>
-          <View style={[styles.infoDivider, { backgroundColor: theme.border }]} /> */}
-          {/* Reference prices per packaging level: what one of each unit costs. */}
-          <View style={styles.infoBottomRow}>
-            <InfoStat label="ICE" value={formatBs(currentVariant.ice)} color={theme.text} />
-            <InfoStat label="Und. mín." value={formatBs(currentVariant.priceUnidad)} color={theme.success} />
-            <InfoStat label="Und. máx." value={formatBs(currentVariant.priceCaja)} color={theme.success} />
-          </View>
-        </View>
-
-        {hasVariants ? (
-          <View style={styles.variantSection}>
-            <View style={styles.variantHeader}>
-              <View style={[styles.variantIconWrap, { backgroundColor: theme.accentSoft }]}>
-                <Icon name="square.grid.2x2" size={15} color={theme.accent} />
-              </View>
-              <View style={styles.variantHeaderTexts}>
-                <ThemedText type="smallBold">Otros sabores disponibles</ThemedText>
-                <ThemedText type="small" themeColor="textSecondary">
-                  Son productos distintos: cada uno se agrega como su propia línea.
-                </ThemedText>
-              </View>
-            </View>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-              {displayProduct.variants.map((variant, index) => (
-                <VariantChip
-                  key={variant.sku}
-                  variant={variant}
-                  familyLabel={displayProduct.family}
-                  selected={index === selectedIndex}
-                  onPress={() => selectVariant(index)}
-                />
-              ))}
-            </ScrollView>
-          </View>
-        ) : null}
-
-        <View style={[styles.equivalenceRow, { backgroundColor: theme.background }]}>
-          <View style={[styles.variantIconWrap, { backgroundColor: theme.accentSoft }]}>
-            <Icon name="cube.box.fill" size={15} color={theme.accent} />
-          </View>
-          <ThemedText type="smallBold" style={styles.equivalenceLabel}>
-            Equivalencias
-          </ThemedText>
-          <View style={[styles.equivalencePill, { backgroundColor: theme.accentSoft }]}>
-            <ThemedText style={[styles.equivalencePillText, { color: theme.accent }]}>
-              1 {maxUnitLabel} = {currentVariant.unitsPerCase} {minUnitLabel}
-            </ThemedText>
-          </View>
-        </View>
-
-        <View style={styles.addSection}>
-          <ThemedText type="smallBold">
-            Agregar al pedido{hasVariants ? ` · ${currentVariant.flavor}` : ''}
-          </ThemedText>
-          <QuantityStepper unit="CAJA" unitLabel={maxUnitLabel} qty={cajaQty} onChange={setCajaQty} />
-          <QuantityStepper unit="UNIDAD" unitLabel={minUnitLabel} qty={unidadQty} onChange={setUnidadQty} />
-        </View>
-
-        {hasPending ? (
-          <View style={styles.summarySection}>
-            <ThemedText type="smallBold">Resumen del pedido</ThemedText>
-            <View style={[styles.summaryCard, { backgroundColor: theme.background }]}>
-              <View style={[styles.summaryIconWrap, { backgroundColor: theme.successSoft }]}>
-                <Icon name="shippingbox.fill" size={16} color={theme.success} />
-              </View>
-              <View style={styles.summaryTexts}>
-                <ThemedText type="smallBold">Total a agregar</ThemedText>
-                <ThemedText type="small" themeColor="textSecondary">
-                  {pendingUnits} unidades
-                </ThemedText>
-              </View>
-              <ThemedText style={[styles.summaryValue, { color: theme.success }]}>{formatBs(pendingSubtotal)}</ThemedText>
-              <Icon name="chevron.right" size={14} color={theme.textSecondary} />
-            </View>
-            {hasVariants ? (
-              <Pressable onPress={commitPending} style={styles.addFlavorLink}>
-                <ThemedText type="linkPrimary" style={{ color: theme.accent }}>
-                  + Agregar otro sabor
-                </ThemedText>
+        {view === 'related' ? (
+          <>
+            <View style={styles.relatedHeader}>
+              <Pressable
+                hitSlop={8}
+                onPress={() => setView('detail')}
+                style={[styles.roundButton, { backgroundColor: theme.background }]}>
+                <Icon name="chevron.left" size={18} color={theme.text} />
               </Pressable>
-            ) : null}
-          </View>
-        ) : null}
+              <View style={styles.relatedTitles}>
+                <ThemedText type="smallBold">Sugerencias</ThemedText>
+                <ThemedText
+                  type="small"
+                  themeColor="textSecondary"
+                  numberOfLines={1}
+                  style={styles.relatedSubtitle}>
+                  {focusProduct.name}
+                </ThemedText>
+              </View>
+            </View>
 
-        {hasVariants && existingLines.length > 0 ? (
-          <View style={[styles.stagedSection, { borderTopColor: theme.border }]}>
-            <ThemedText type="smallBold">Ya en el pedido</ThemedText>
+            {/* A picker, not an entry form: quantities live with the steppers in the detail
+                view, so choosing a card focuses it and goes straight back there. Keeping
+                one place to type quantities is what stops the sheet being ambiguous again. */}
+            <ThemedText type="small" themeColor="textSecondary" style={styles.hint}>
+              Toca uno para cargar sus cantidades
+            </ThemedText>
 
-            {existingLines.map((line) => {
-              const unitsPerCase = line.unitsPerCase;
-              return (
-                <View key={line.id} style={[styles.stagedRow, { backgroundColor: theme.background }]}>
-                  <View style={[styles.stagedIconWrap, { backgroundColor: theme.accentSoft }]}>
-                    <Icon name="bag.fill" size={14} color={theme.accent} />
-                  </View>
-                  <View style={styles.stagedTexts}>
-                    <ThemedText type="smallBold" numberOfLines={1}>
-                      {displayProduct.name} · {line.flavor}
-                    </ThemedText>
-                    <ThemedText type="small" themeColor="textSecondary">
-                      {line.qty} {line.unit === 'CAJA' ? maxUnitLabel : minUnitLabel}
-                      {line.unit === 'CAJA'
-                        ? ` (${line.qty * unitsPerCase} ${minUnitLabel.toLowerCase()})`
-                        : ''}
-                    </ThemedText>
-                  </View>
-                  <ThemedText style={[styles.stagedPrice, { color: theme.accent }]}>
-                    {formatBs(line.qty * line.unitPrice)}
+            {relatedSections.map(({ axis, products }) => (
+              <View key={axis} style={styles.section}>
+                <ThemedText style={[styles.axisHeading, { color: theme.textSecondary }]}>
+                  {AXIS_LABELS[axis]}
+                </ThemedText>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cardsRow}>
+                  {products.map((suggestion) => (
+                    <SuggestionCard
+                      key={String(suggestion.id)}
+                      product={suggestion}
+                      axis={axis}
+                      inOrder={isInOrder(suggestion.id)}
+                      onPress={() => pickSuggestion(suggestion)}
+                    />
+                  ))}
+                </ScrollView>
+              </View>
+            ))}
+          </>
+        ) : (
+          <>
+            {/* Anchor block: the steppers below belong to this exact row of the catalog, so
+                the full description comes first. */}
+            <View style={styles.titleBlock}>
+              <ThemedText type="subtitle" style={styles.title}>
+                {focusProduct.name}
+              </ThemedText>
+              {/* <View style={styles.pillRow}>
+                <View style={[styles.pill, { backgroundColor: theme.backgroundSelected }]}>
+                  <ThemedText style={[styles.codePillText, { color: theme.textSecondary }]}>
+                    {focusProduct.id}
                   </ThemedText>
-                  <Pressable hitSlop={8} onPress={() => editExistingLine(line)} style={styles.stagedIcon}>
-                    <Icon name="pencil" size={14} color={theme.textSecondary} />
-                  </Pressable>
-                  <Pressable hitSlop={8} onPress={() => cart.removeLine(line.id)} style={styles.stagedIcon}>
-                    <Icon name="trash" size={14} color={theme.danger} />
+                </View>
+                {focusProduct.sizeLabel ? (
+                  <View style={[styles.pill, { backgroundColor: theme.accentSoft }]}>
+                    <ThemedText style={[styles.pillText, { color: theme.accent }]}>
+                      {focusProduct.sizeLabel}
+                    </ThemedText>
+                  </View>
+                ) : null}
+                <View
+                  style={[
+                    styles.pill,
+                    { backgroundColor: focusProduct.inStock ? theme.successSoft : theme.backgroundSelected },
+                  ]}>
+                  <ThemedText
+                    style={[
+                      styles.pillText,
+                      { color: focusProduct.inStock ? theme.success : theme.textSecondary },
+                    ]}>
+                    {focusProduct.inStock ? 'En stock' : 'Agotado'}
+                  </ThemedText>
+                </View>
+              </View> */}
+            </View>
+
+            <View style={[styles.infoCard, { backgroundColor: theme.background }]}>
+              {/* Reference prices per packaging level: what one of each unit costs. */}
+              <View style={styles.infoBottomRow}>
+                <InfoStat label="ICE" value={formatBs(focusProduct.ice)} color={theme.text} />
+                <InfoStat label="Und. mín." value={formatBs(focusProduct.priceUnidad)} color={theme.success} />
+                <InfoStat label="Und. máx." value={formatBs(focusProduct.priceCaja)} color={theme.success} />
+              </View>
+            </View>
+
+            <View style={[styles.equivalenceRow, { backgroundColor: theme.background }]}>
+              <View style={[styles.iconWrap, { backgroundColor: theme.accentSoft }]}>
+                <Icon name="cube.box.fill" size={15} color={theme.accent} />
+              </View>
+              <ThemedText type="smallBold" style={styles.equivalenceLabel}>
+                Equivalencias
+              </ThemedText>
+              <View style={[styles.equivalencePill, { backgroundColor: theme.accentSoft }]}>
+                <ThemedText style={[styles.equivalencePillText, { color: theme.accent }]}>
+                  1 {focusProduct.maxUnit} = {focusProduct.unitsPerCase} {focusProduct.minUnit}
+                </ThemedText>
+              </View>
+            </View>
+
+            <View style={styles.section}>
+              <ThemedText type="smallBold">Cantidad</ThemedText>
+              <QuantityStepper
+                unit="CAJA"
+                unitLabel={focusProduct.maxUnit}
+                qty={focusEntry?.qtyMax ?? 0}
+                onChange={(qty) => setFocusQty('qtyMax', qty)}
+              />
+              <QuantityStepper
+                unit="UNIDAD"
+                unitLabel={focusProduct.minUnit}
+                qty={focusEntry?.qtyMin ?? 0}
+                onChange={(qty) => setFocusQty('qtyMin', qty)}
+              />
+
+              {/* One line instead of a summary card: the seller only needs to confirm the
+                  quantity just typed resolves to the amount they expect. */}
+              {hasFocusQty && focusLine ? (
+                <View style={styles.focusTotalRow}>
+                  <ThemedText type="small" themeColor="textSecondary" style={styles.focusTotalLabel}>
+                    {lineMinUnits(focusLine)} {focusProduct.minUnit} en total
+                  </ThemedText>
+                  <ThemedText style={[styles.focusTotalValue, { color: theme.success }]}>
+                    {formatBs(lineAmount(focusLine))}
+                  </ThemedText>
+                </View>
+              ) : null}
+            </View>
+
+            {inlineAxis && suggestions.length > 0 ? (
+              <View style={styles.section}>
+                {/* One axis inline keeps the strip short; the rest of the family is a tap
+                    away, which is also the only route to the bulk-entry list. */}
+                <View style={styles.suggestionsHeader}>
+                  <ThemedText type="smallBold" style={styles.suggestionsTitle}>
+                    Sugerencias
+                  </ThemedText>
+                  <Pressable
+                    onPress={() => setView('related')}
+                    style={[styles.moreButton, { backgroundColor: theme.accentSoft }]}>
+                    <ThemedText type="smallBold" style={[styles.moreButtonText, { color: theme.accent }]}>
+                      Ver más
+                    </ThemedText>
+                    <Icon name="chevron.right" size={11} color={theme.accent} />
                   </Pressable>
                 </View>
-              );
-            })}
-          </View>
-        ) : null}
+
+                <ThemedText type="small" themeColor="textSecondary" style={styles.hint}>
+                  Toca para cambiar de producto
+                </ThemedText>
+
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cardsRow}>
+                  {suggestions.map((suggestion) => (
+                    <SuggestionCard
+                      key={String(suggestion.id)}
+                      product={suggestion}
+                      axis={inlineAxis}
+                      inOrder={isInOrder(suggestion.id)}
+                      onPress={() => focusSuggestion(suggestion)}
+                    />
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null}
+
+            {draftedLines.length > 1 ? (
+              <View style={[styles.draftSection, { borderTopColor: theme.border }]}>
+                <ThemedText type="smallBold">En este pedido · {draftedLines.length} productos</ThemedText>
+
+                {draftedLines.map((line) => {
+                  const isFocused = line.productId === focusProduct.id;
+                  return (
+                    <Pressable
+                      key={String(line.productId)}
+                      onPress={() => setFocusId(line.productId)}
+                      style={[
+                        styles.draftRow,
+                        {
+                          backgroundColor: theme.background,
+                          // Accent border marks the row the steppers above are editing.
+                          borderColor: isFocused ? theme.accent : 'transparent',
+                        },
+                      ]}>
+                      <View style={[styles.iconWrap, { backgroundColor: theme.accentSoft }]}>
+                        <Icon name="bag.fill" size={14} color={theme.accent} />
+                      </View>
+                      <View style={styles.draftTexts}>
+                        <ThemedText type="smallBold" numberOfLines={1} style={styles.draftName}>
+                          {line.productName}
+                        </ThemedText>
+                        <ThemedText type="small" themeColor="textSecondary" style={styles.draftQty}>
+                          {lineQtyLabel(line)}
+                        </ThemedText>
+                      </View>
+                      <ThemedText style={[styles.draftPrice, { color: theme.accent }]}>
+                        {formatBs(lineAmount(line))}
+                      </ThemedText>
+                      <Pressable hitSlop={8} onPress={() => clearDraftEntry(line.productId)} style={styles.draftIcon}>
+                        <Icon name="trash" size={14} color={theme.danger} />
+                      </Pressable>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : null}
+          </>
+        )}
       </ScrollView>
     </BottomSheet>
   );
@@ -360,35 +462,37 @@ function InfoStat({ label, value, color }: { label: string; value: string; color
 const styles = StyleSheet.create({
   container: {
     paddingHorizontal: Spacing.three,
-    paddingBottom: Spacing.three,
+    // Small: the footer's own top padding already separates the content from the buttons,
+    // so a full Spacing.three here just doubled that gap.
+    paddingBottom: Spacing.one,
     gap: Spacing.two,
   },
-  topRow: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-  },
-  codePill: {
-    paddingHorizontal: Spacing.two,
-    paddingVertical: 6,
-    borderRadius: Radius.pill,
-  },
-  codePillText: {
-    fontFamily: Fonts.mono,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  stockPill: {
-    paddingHorizontal: Spacing.two,
-    paddingVertical: 6,
-    borderRadius: Radius.pill,
-  },
-  stockPillText: {
-    fontSize: 12,
-    fontWeight: '700',
+  titleBlock: {
+    gap: 6,
   },
   title: {
     fontSize: 17,
     lineHeight: 22,
+  },
+  pillRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  pill: {
+    paddingHorizontal: ChipPadding.horizontal,
+    paddingVertical: 3,
+    borderRadius: Radius.pill,
+  },
+  pillText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  codePillText: {
+    fontFamily: Fonts.mono,
+    fontSize: 11,
+    fontWeight: '700',
   },
   infoCard: {
     borderRadius: Radius.sm,
@@ -396,14 +500,8 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.two,
     gap: Spacing.two,
   },
-  infoTopRow: {
-    flexDirection: 'row',
-  },
   infoBottomRow: {
     flexDirection: 'row',
-  },
-  infoDivider: {
-    height: StyleSheet.hairlineWidth,
   },
   infoStat: {
     flex: 1,
@@ -414,29 +512,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
-  variantSection: {
-    gap: 6,
-  },
-  variantHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-  },
-  variantIconWrap: {
+  iconWrap: {
     width: 26,
     height: 26,
     borderRadius: Radius.sm,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  variantHeaderTexts: {
-    flex: 1,
-    gap: 2,
-  },
-  chipsRow: {
-    gap: Spacing.two,
-    paddingRight: Spacing.three,
-    paddingTop: Spacing.one,
   },
   equivalenceRow: {
     flexDirection: 'row',
@@ -458,69 +539,107 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
   },
-  addSection: {
+  section: {
     gap: 6,
   },
-  summarySection: {
-    gap: 6,
-  },
-  summaryCard: {
+  focusTotalRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
-    borderRadius: Radius.sm,
     paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.two,
   },
-  summaryIconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: Radius.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  summaryTexts: {
+  focusTotalLabel: {
     flex: 1,
-    gap: 1,
+    fontSize: 12,
   },
-  summaryValue: {
+  focusTotalValue: {
     fontSize: 14,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
-  addFlavorLink: {
-    paddingVertical: Spacing.one,
+  suggestionsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
   },
-  stagedSection: {
+  suggestionsTitle: {
+    flex: 1,
+  },
+  moreButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingLeft: ChipPadding.horizontal,
+    paddingRight: 6,
+    paddingVertical: 2,
+    borderRadius: Radius.pill,
+  },
+  moreButtonText: {
+    fontSize: 11,
+  },
+  relatedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  roundButton: {
+    width: 34,
+    height: 34,
+    borderRadius: Radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  relatedTitles: {
+    flex: 1,
+    gap: 1,
+  },
+  axisHeading: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  relatedSubtitle: {
+    fontSize: 12,
+  },
+  hint: {
+    fontSize: 11,
+  },
+  cardsRow: {
+    gap: Spacing.two,
+    paddingRight: Spacing.three,
+    paddingTop: Spacing.one,
+  },
+  draftSection: {
     gap: 6,
     paddingTop: Spacing.two,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  stagedRow: {
+  draftRow: {
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: Radius.sm,
+    borderWidth: 1.5,
     paddingVertical: 6,
     paddingHorizontal: Spacing.two,
     gap: 6,
   },
-  stagedIconWrap: {
-    width: 24,
-    height: 24,
-    borderRadius: Radius.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stagedTexts: {
+  draftTexts: {
     flex: 1,
     gap: 1,
   },
-  stagedPrice: {
+  draftName: {
+    fontSize: 12,
+  },
+  draftQty: {
+    fontSize: 11,
+  },
+  draftPrice: {
     fontSize: 13,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
-  stagedIcon: {
+  draftIcon: {
     padding: 2,
   },
   footerRow: {

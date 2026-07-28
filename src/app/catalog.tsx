@@ -14,13 +14,14 @@ import { ProductDetailSheet } from '@/components/product-detail/product-detail-s
 import { ThemedText } from '@/components/themed-text';
 import { useDialog } from '@/components/ui/dialog';
 import { Icon } from '@/components/ui/icon';
+import { OfflineBadge } from '@/components/ui/offline-badge';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
+import { useClientVisits } from '@/context/client-visit-context';
 import type { PaymentMethod } from '@/data/mock-incentives';
 import {
   estrategiaProducts,
   lastOrderLines,
-  mockClient,
   mockProducts,
   ultimosVendidosProducts,
 } from '@/data/mock-catalog';
@@ -69,6 +70,11 @@ export default function CatalogScreen() {
   const dialog = useDialog();
   const insets = useContentInsets();
   const { clientId } = useLocalSearchParams<{ clientId?: string }>();
+  const { clients } = useClientVisits();
+
+  // Resolved from the route param, not from mock data: this header used to name a
+  // hardcoded client, so it showed the wrong person for whoever was actually being visited.
+  const routeClient = clients.find((c) => c.id === clientId) ?? null;
 
   // The summary screen resolves discounts and confirms the order — closing the
   // visit belongs there, not here.
@@ -101,7 +107,7 @@ export default function CatalogScreen() {
         return (
           p.name.toLowerCase().includes(q) ||
           p.family.toLowerCase().includes(q) ||
-          p.variants.some((v) => v.sku.toLowerCase().includes(q))
+          String(p.id).includes(q)
         );
       })
       .sort((a, b) => (sortAsc ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)));
@@ -132,7 +138,7 @@ export default function CatalogScreen() {
 
   /** Every product the cart can hold, so a cart line can be traced back to its product. */
   const productsById = useMemo(() => {
-    const map = new Map<string, Product>();
+    const map = new Map<number, Product>();
     [...mockProducts, ...ultimosVendidosProducts, ...estrategiaProducts].forEach((p) => {
       if (!map.has(p.id)) map.set(p.id, p);
     });
@@ -184,10 +190,13 @@ export default function CatalogScreen() {
             <ThemedText type="smallBold" style={styles.headerTitle}>
               Catálogo
             </ThemedText>
+            {/* Owner: route-level context, matching every other screen header. */}
             <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-              {mockClient.code} · {mockClient.name}
+              {routeClient ? `${routeClient.ownerCode}-${routeClient.owner}` : 'Sin cliente'}
             </ThemedText>
           </View>
+
+          <OfflineBadge />
 
           {/* Visit counter — same placement across every client screen */}
           {clientId ? <VisitTimer clientId={clientId} compact /> : null}
@@ -290,7 +299,7 @@ export default function CatalogScreen() {
             <FlatList
               ref={listRef}
               data={filtered}
-              keyExtractor={(item) => item.id}
+              keyExtractor={(item) => String(item.id)}
               renderItem={({ item }) => <ProductCard product={item} onPress={setSelectedProduct} />}
               getItemLayout={(_, index) => ({ length: PRODUCT_CARD_HEIGHT, offset: PRODUCT_CARD_HEIGHT * index, index })}
               onScrollToIndexFailed={(info) => {
@@ -342,7 +351,14 @@ export default function CatalogScreen() {
         activeCategory={categoryFilter}
         onSelect={setCategoryFilter}
       />
-      <ProductDetailSheet product={selectedProduct} onClose={closeProductSheet} editLine={editingLine} />
+      {/* The full catalog travels with the sheet: suggestions are sibling rows, and only
+          the catalog knows which rows share a base name. */}
+      <ProductDetailSheet
+        product={selectedProduct}
+        catalog={mockProducts}
+        onClose={closeProductSheet}
+        editLine={editingLine}
+      />
     </View>
   );
 }
