@@ -5,6 +5,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { VisitTimer } from '@/components/client/visit-timer';
 import { DeliveryPointSheet } from '@/components/order/delivery-point-sheet';
+import { DeliveryWindowSheet } from '@/components/order/delivery-window-sheet';
+import { GiftProductSheet } from '@/components/order/gift-product-sheet';
+import { DatePickerDialog } from '@/components/ui/date-picker';
 import { ThemedText } from '@/components/themed-text';
 import { useDialog } from '@/components/ui/dialog';
 import { Icon, type IconName } from '@/components/ui/icon';
@@ -13,19 +16,29 @@ import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
 import { useClientVisits } from '@/context/client-visit-context';
 import { useConnectivity } from '@/context/connectivity-context';
+import { bonificationOf, useOrderIncentives } from '@/context/order-incentives-context';
+import { useOrders } from '@/context/orders-context';
+import { type LineBonification } from '@/data/mock-bonifications';
+import { mockProducts } from '@/data/mock-catalog';
 import { calculateIncentives, PAYMENT_METHODS, type PaymentMethod } from '@/data/mock-incentives';
 import {
+  deliveryDateLabel,
   deliveryDateOptions,
   deliveryPointLabel,
-  DELIVERY_HOURS,
+  DELIVERY_WINDOWS,
+  deliveryWindowLabelFor,
+  deliveryWindowSpan,
+  fromDateKey,
   orderDetailsFor,
   ORDER_TYPES,
+  toDateKey,
   type OrderType,
 } from '@/data/mock-order-details';
-import { mockSeller } from '@/data/mock-user';
 import { useContentInsets } from '@/hooks/use-content-insets';
 import { useTheme } from '@/hooks/use-theme';
-import { iceTotalOf, lineAmount } from '@/utils/order';
+import type { CartLine, Product } from '@/types/catalog';
+import { iceTotalOf, lineAmount, lineIce, lineQtyDetail } from '@/utils/order';
+import { suggestionsFor } from '@/utils/suggestions';
 import { formatBs } from '@/utils/currency';
 
 export default function OrderConfirmScreen() {
@@ -33,36 +46,74 @@ export default function OrderConfirmScreen() {
   const router = useRouter();
   const dialog = useDialog();
   const insets = useContentInsets();
-  const { clients, markOrder } = useClientVisits();
+  const { clients, markOrder, activityOf } = useClientVisits();
   const { lines, clearCart, totalAmount } = useCart();
   const { offline } = useConnectivity();
 
-  const { clientId, paymentMethod: paymentParam } = useLocalSearchParams<{
+  const { clientId, paymentMethod: paymentParam, editOrderId } = useLocalSearchParams<{
     clientId?: string;
     paymentMethod?: string;
+    /** Set when the catalog was opened to amend a placed order. */
+    editOrderId?: string;
   }>();
 
+  const { updateOrder, find: findOrder } = useOrders();
+  /**
+   * The order being amended, or null for a new one. Everything below branches on this rather than
+   * on the raw param, so a stale id — an order deleted from another screen while this one sat in
+   * the stack — falls back to behaving like a new order instead of saving into nothing.
+   */
+  const editing = findOrder(editOrderId);
+
   const client = clients.find((c) => c.id === clientId) ?? null;
+
+  /**
+   * Whether this is a remote order, inferred from the on-site check-in rather than passed
+   * along: the client screen calls `markEntry` only on the presencial path — the remote one
+   * goes straight to the catalog without it — and both routes reach this screen carrying
+   * nothing but the client id. `entered` is therefore the only shared trace of which door
+   * the seller came through.
+   */
+  const isRemote = clientId ? !activityOf(clientId).entered : false;
   const paymentMethod: PaymentMethod =
     PAYMENT_METHODS.find((m) => m === paymentParam) ?? 'Contado';
 
   const details = useMemo(() => (client ? orderDetailsFor(client) : null), [client]);
   const dateOptions = useMemo(() => deliveryDateOptions(), []);
 
-  const [orderType, setOrderType] = useState<OrderType>('Normal');
+  /**
+   * Seeded from the order when amending one, so the seller lands on what they already agreed and
+   * changes only what moved. Lazy initialisers, evaluated once: after that these are the form's
+   * own state, and re-deriving them would undo edits on every render.
+   */
+  const [orderType, setOrderType] = useState<OrderType>(editing?.orderType ?? 'Normal');
   const [deliveryPointId, setDeliveryPointId] = useState<string | null>(null);
   const [pointSheetVisible, setPointSheetVisible] = useState(false);
+  /** Which line's gift flavor is being chosen — the ordered product's id, or null when closed. */
+  const [giftLineId, setGiftLineId] = useState<number | null>(null);
   const [contact, setContact] = useState('');
   const [notes, setNotes] = useState('');
-  const [deliveryDate, setDeliveryDate] = useState(dateOptions[0].key);
-  const [fromHour, setFromHour] = useState<string>(DELIVERY_HOURS[0]);
-  const [toHour, setToHour] = useState<string>(DELIVERY_HOURS[2]);
+  const [deliveryDate, setDeliveryDate] = useState(() => editing?.deliveryDate ?? dateOptions[0].key);
+  const [dateSheetVisible, setDateSheetVisible] = useState(false);
+  const [windowSheetVisible, setWindowSheetVisible] = useState(false);
+  const [fromHour, setFromHour] = useState<string>(editing?.deliveryFrom ?? DELIVERY_WINDOWS[1].from);
+  const [toHour, setToHour] = useState<string>(editing?.deliveryTo ?? DELIVERY_WINDOWS[1].to);
 
   const iceTotal = useMemo(() => iceTotalOf(lines), [lines]);
+
+  /**
+   * The pricing service's reply, requested by the cart's "Aplicar descuentos y bonificaciones"
+   * button before it navigated here. Falling back to a local calculation rather than showing
+   * an error: this screen is also reachable by reload or deep link, where no request was ever
+   * made, and a summary with no discount on it would be wrong rather than merely empty.
+   */
+  const { result, chooseGift, reset: resetIncentives } = useOrderIncentives();
   const incentives = useMemo(
-    () => calculateIncentives(paymentMethod, totalAmount),
-    [paymentMethod, totalAmount],
+    () => result?.incentives ?? calculateIncentives(paymentMethod, totalAmount),
+    [result, paymentMethod, totalAmount],
   );
+
+  const giftBonification = giftLineId === null ? null : bonificationOf(result, giftLineId);
 
   const discountAmount = (totalAmount * incentives.discountPct) / 100;
   const finalTotal = totalAmount - discountAmount;
@@ -79,31 +130,88 @@ export default function OrderConfirmScreen() {
   const selectedPoint = details?.deliveryPoints.find((p) => p.id === selectedPointId) ?? null;
   const contactValue = contact || details?.contact || '';
 
-  /** From/until must describe a window, so keep the end at or after the start. */
-  const changeFromHour = (hour: string) => {
-    setFromHour(hour);
-    if (DELIVERY_HOURS.indexOf(hour) > DELIVERY_HOURS.indexOf(toHour)) {
-      setToHour(hour);
-    }
+  /**
+   * The hours read back the way they are spoken: the stretch of day they name and how long they
+   * last. Derived rather than looked up, so a range the seller built off the timeline reads as a
+   * window too instead of leaving the row with bare numbers and no name. No guard keeping the end
+   * after the start: the sheet cannot produce an inverted range.
+   */
+  const windowSummary = `${deliveryWindowLabelFor(fromHour, toHour)} · ${deliveryWindowSpan(fromHour, toHour)}`;
+
+  /** True when the date came from the calendar rather than from one of the quick chips. */
+  const customDate = !dateOptions.some((option) => option.key === deliveryDate);
+
+  /**
+   * Writes the amended order back over the one being edited.
+   *
+   * `id`, `createdAtMs` and `status` are carried across untouched: this is the same order, and
+   * resetting its creation instant would silently hand it a fresh 48-hour edit window every time
+   * it was saved. The amounts are recomputed from the lines as they now stand, because the whole
+   * point of the edit was that the lines changed.
+   */
+  const saveEdit = () => {
+    if (!editing) return;
+    updateOrder({
+      ...editing,
+      deliveryDate,
+      deliveryFrom: fromHour,
+      deliveryTo: toHour,
+      paymentMethod,
+      orderType,
+      // Snapshotted for the same reason the cart was copied on the way in: the order must not
+      // share a line array with a cart that is about to be emptied and refilled.
+      lines: lines.map((line) => ({ ...line })),
+      bonifications: result?.bonifications ?? editing.bonifications,
+      bonificationUnits: (result?.bonifications ?? editing.bonifications).reduce(
+        (sum, bonification) => sum + bonification.qty,
+        0,
+      ),
+      subtotal: totalAmount,
+      discount: discountAmount,
+      ice: iceTotal,
+      total: finalTotal,
+      // Back to unsent: the order on the server is no longer what the seller has agreed.
+      synced: false,
+    });
   };
 
   const confirm = () => {
     dialog.show({
       icon: 'checkmark.circle.fill',
       tone: 'success',
-      title: 'Pedido confirmado',
-      message: `Se registró el pedido por ${formatBs(finalTotal)}.`,
+      title: editing ? 'Pedido actualizado' : 'Pedido confirmado',
+      message: editing
+        ? `Se guardaron los cambios de ${editing.id}. Nuevo total: ${formatBs(finalTotal)}.`
+        : `Se registró el pedido por ${formatBs(finalTotal)}.`,
       actions: [
         {
           label: 'Listo',
           variant: 'primary',
           onPress: () => {
-            if (clientId) markOrder(clientId);
+            if (editing) saveEdit();
+            // Only a new order closes the visit: amending one the client already placed is not a
+            // second sale, and marking it again would overwrite when the visit actually ended.
+            else if (clientId) markOrder(clientId);
+
             clearCart();
-            router.replace(
-              clientId
-                ? ({ pathname: '/client/[id]', params: { id: clientId } } as Href)
-                : ('/map' as Href),
+            // Dropped alongside the cart, not after it: the reply is keyed by product code,
+            // so a next order containing the same product would otherwise inherit this
+            // order's free goods.
+            resetIncentives();
+            /**
+             * `dismissTo`, not `replace`: the catalog and this screen are still on the stack
+             * behind us, and replacing only swaps the top one — which left the client menu with
+             * the catalog underneath it, so its back arrow went forwards into a finished order
+             * instead of out to the map. Dismissing pops everything above the destination, so
+             * back from there means back to where the visit actually started. Falls back to a
+             * replace on its own if the destination is not in the stack.
+             */
+            router.dismissTo(
+              editing
+                ? ('/orders' as Href)
+                : clientId
+                  ? ({ pathname: '/client/[id]', params: { id: clientId } } as Href)
+                  : ('/map' as Href),
             );
           },
         },
@@ -123,8 +231,8 @@ export default function OrderConfirmScreen() {
           </Pressable>
 
           <View style={styles.titleColumn}>
-            <ThemedText type="smallBold" style={styles.headerTitle}>
-              Confirmar pedido
+            <ThemedText type="smallBold" style={styles.headerTitle} numberOfLines={1}>
+              {editing ? `Editar ${editing.id}` : 'Confirmar pedido'}
             </ThemedText>
             <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
               {/* Owner: route-level context, matching every other screen header. */}
@@ -138,24 +246,35 @@ export default function OrderConfirmScreen() {
         </View>
       </SafeAreaView>
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.three }]}>
-        {/* Where the order is being taken from — captured with the order. */}
-        <View style={[styles.card, styles.locationCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-          <View style={[styles.locationIcon, { backgroundColor: theme.accentSoft }]}>
-            <Icon name="mappin" size={16} color={theme.accent} />
+      {/* Who the order is for and where it is being taken from — captured with the order,
+          and pinned outside the ScrollView because it is the answer to "am I on the right
+          client, on the right terms?", which has to stay true no matter how far down the
+          form the seller is. Two lines and no caption on either: the storefront glyph says
+          the first one is the shop, and the second one names itself. */}
+      <View style={styles.pinned}>
+        <View style={[styles.card, styles.clientCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+          <View style={[styles.clientIcon, { backgroundColor: theme.accentSoft }]}>
+            <Icon name="store" size={16} color={theme.accent} />
           </View>
-          <View style={styles.locationTexts}>
-            <ThemedText themeColor="textSecondary" style={styles.metaLabel}>
-              Ubicación actual
+          <View style={styles.clientTexts}>
+            <ThemedText type="smallBold" numberOfLines={1} style={styles.clientName}>
+              {client ? `${client.code}-${client.name}` : 'Sin cliente'}
             </ThemedText>
-            <ThemedText type="smallBold" style={styles.coords}>
-              {mockSeller.location.lat.toFixed(6)}, {mockSeller.location.lng.toFixed(6)}
+            {/* Violet for remote, matching the colour the client screen gives that choice:
+                a remote order is the exception there, so it should not read as routine here
+                either. */}
+            <ThemedText
+              numberOfLines={1}
+              style={[styles.orderMode, { color: isRemote ? theme.violet : theme.textSecondary }]}>
+              {isRemote ? 'Pedido remoto' : 'Pedido presencial'}
             </ThemedText>
           </View>
         </View>
+      </View>
 
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.three }]}>
         <SectionLabel>Detalle del pedido</SectionLabel>
         {lines.length === 0 ? (
           <View style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
@@ -170,41 +289,55 @@ export default function OrderConfirmScreen() {
             return (
               <View
                 key={String(line.productId)}
-                style={[styles.itemCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+                style={[
+                  styles.itemCard,
+                  {
+                    backgroundColor: theme.backgroundElement,
+                    borderTopColor: theme.border,
+                    borderRightColor: theme.border,
+                    borderBottomColor: theme.border,
+                    borderLeftColor: theme.accent,
+                  },
+                ]}>
+                {/* Same three rows as the catalog's order panel — what it is, how much
+                    of it, what it costs — so a line the seller already reviewed there
+                    does not rearrange itself on the screen where they confirm it. */}
                 <View style={styles.itemTop}>
                   <ThemedText type="smallBold" numberOfLines={1} style={styles.itemName}>
                     {line.productName}
                   </ThemedText>
-                  {line.sizeLabel ? (
-                    <View style={[styles.sizePill, { backgroundColor: theme.backgroundSelected }]}>
-                      <ThemedText style={[styles.sizeText, { color: theme.textSecondary }]}>
-                        {line.sizeLabel}
-                      </ThemedText>
-                    </View>
-                  ) : null}
                   <ThemedText style={[styles.itemAmount, { color: theme.success }]} numberOfLines={1}>
                     {formatBs(amount - lineDiscount)}
                   </ThemedText>
                 </View>
 
-                {/* Each unit type only appears when it was actually ordered. */}
-                {line.qtyMax > 0 ? (
-                  <QtyRow qty={line.qtyMax} unitLabel={line.maxUnitLabel} unitPrice={line.unitPriceMax} />
-                ) : null}
-                {line.qtyMin > 0 ? (
-                  <QtyRow qty={line.qtyMin} unitLabel={line.minUnitLabel} unitPrice={line.unitPriceMin} />
-                ) : null}
+                <ThemedText themeColor="textSecondary" numberOfLines={1} style={styles.qtyText}>
+                  {lineQtyDetail(line)}
+                </ThemedText>
 
                 <View style={styles.itemFooter}>
                   <ThemedText themeColor="textSecondary" style={styles.metaLabel}>
-                    ICE {formatBs(line.ice)}
+                    ICE {formatBs(lineIce(line))}
                   </ThemedText>
+                  {/* Money only — the percentage was identical on every line, so repeating it
+                      down the list said nothing the totals do not say once. Abbreviated here
+                      and spelled out in the totals: this row shares its width with the ICE
+                      figure, and the totals row has a column to itself. */}
                   {lineDiscount > 0 ? (
                     <ThemedText style={[styles.metaLabel, { color: theme.accent }]}>
-                      Desc. {incentives.discountPct}% −{formatBs(lineDiscount)}
+                      Desc. −{formatBs(lineDiscount)}
                     </ThemedText>
                   ) : null}
                 </View>
+
+                {/* Free goods hang off the line that earned them rather than being collected
+                    into one list: the award is per line and the seller has to be able to see
+                    which purchase produced it. */}
+                <GiftRow
+                  line={line}
+                  bonification={bonificationOf(result, line.productId)}
+                  onChangeGift={() => setGiftLineId(line.productId)}
+                />
               </View>
             );
           })
@@ -212,20 +345,17 @@ export default function OrderConfirmScreen() {
 
         {/* Totals — the discount the previous screen sent us to calculate. */}
         <View style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-          <TotalRow label="Productos" value={String(lines.length)} />
           <TotalRow label="ICE" value={formatBs(iceTotal)} />
           <TotalRow label="Pago" value={paymentMethod} />
           <TotalRow label="Subtotal" value={formatBs(totalAmount)} />
-          {incentives.discountPct > 0 ? (
-            <TotalRow
-              label={`Descuento (${incentives.reasons.join(' · ')})`}
-              value={`−${formatBs(discountAmount)}`}
-              tone={theme.accent}
-            />
+          {/* Just "Descuento" and an amount. The reasons behind it carried their own
+              percentages, which is exactly what was asked to come out. */}
+          {discountAmount > 0 ? (
+            <TotalRow label="Descuento" value={`−${formatBs(discountAmount)}`} tone={theme.accent} />
           ) : null}
-          {incentives.bonification ? (
-            <TotalRow label="Bonificación" value={incentives.bonification} tone={theme.success} />
-          ) : null}
+          {/* No whole-order "Bonificación" row: free goods are per line now and each item card
+              carries its own, so a single summary line here told a second, vaguer version of
+              the same story. */}
           <View style={[styles.grandTotalRow, { borderTopColor: theme.border }]}>
             <ThemedText type="smallBold" style={styles.grandTotalLabel}>
               Total general
@@ -321,29 +451,86 @@ export default function OrderConfirmScreen() {
 
         <SectionLabel>Entrega</SectionLabel>
         <View style={[styles.card, styles.deliveryCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-          <ChipPickerRow
-            icon="calendar"
-            label="Fecha"
-            options={dateOptions.map((d) => ({ key: d.key, label: d.label }))}
-            selected={deliveryDate}
-            onSelect={setDeliveryDate}
-          />
-          <ChipPickerRow
-            icon="clock.fill"
-            label="Desde"
-            options={DELIVERY_HOURS.map((h) => ({ key: h, label: h }))}
-            selected={fromHour}
-            onSelect={changeFromHour}
-          />
-          <ChipPickerRow
-            icon="clock.fill"
-            label="Hasta"
-            options={DELIVERY_HOURS.filter(
-              (h) => DELIVERY_HOURS.indexOf(h) >= DELIVERY_HOURS.indexOf(fromHour),
-            ).map((h) => ({ key: h, label: h }))}
-            selected={toHour}
-            onSelect={setToHour}
-          />
+          {/* The next three days are one tap, because they are almost every order; anything
+              further out goes through the calendar. Both feed the same value, so the chip row
+              stays highlighted when the calendar happens to land on one of those days. */}
+          <View style={styles.deliveryField}>
+            <ThemedText themeColor="textSecondary" style={styles.fieldCaption}>
+              ¿Qué día se entrega?
+            </ThemedText>
+            {/* Quick days on the left, calendar on the right — the same shape the tasks form
+                uses for an expiry date, so the way to reach a calendar is one thing the seller
+                learns once. */}
+            <View style={styles.dateRow}>
+              <View style={styles.dateChoices}>
+                {dateOptions.map((option) => {
+                  const active = option.key === deliveryDate;
+                  return (
+                    <Pressable
+                      key={option.key}
+                      onPress={() => setDeliveryDate(option.key)}
+                      style={[
+                        styles.dateChip,
+                        {
+                          backgroundColor: active ? theme.accent : theme.background,
+                          borderColor: active ? theme.accent : theme.border,
+                        },
+                      ]}>
+                      <ThemedText
+                        type="smallBold"
+                        numberOfLines={1}
+                        style={[styles.dateChipText, { color: active ? theme.onAccent : theme.text }]}>
+                        {option.label}
+                      </ThemedText>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <Pressable
+                onPress={() => setDateSheetVisible(true)}
+                style={[
+                  styles.dateButton,
+                  {
+                    backgroundColor: customDate ? theme.accentSoft : theme.background,
+                    borderColor: customDate ? theme.accent : theme.border,
+                  },
+                ]}>
+                <Icon name="calendar" size={17} color={theme.accent} />
+              </Pressable>
+            </View>
+            {/* Spelled out underneath whichever way it was picked: "Hoy" is convenient but a
+                weekday and a number is what gets repeated back to the client. */}
+            <ThemedText type="smallBold" numberOfLines={1} style={styles.deliveryReadback}>
+              {deliveryDateLabel(deliveryDate)}
+            </ThemedText>
+          </View>
+
+          <View style={[styles.deliveryDivider, { borderTopColor: theme.border }]} />
+
+          {/* One row, one sheet. Inside it the usual windows are a chip each and anything else is
+              drawn on a timeline, so the row below can be any pair of hours — it always reads back
+              as a name and a duration all the same. The caption spells out whose hours these are —
+              as two bare "Desde"/"Hasta" chip rows it never said. */}
+          <View style={styles.deliveryField}>
+            <ThemedText themeColor="textSecondary" style={styles.fieldCaption}>
+              ¿En qué horario recibe el cliente?
+            </ThemedText>
+            <Pressable
+              onPress={() => setWindowSheetVisible(true)}
+              style={[styles.selectRow, { backgroundColor: theme.background, borderColor: theme.border }]}>
+              <Icon name="clock.fill" size={15} color={theme.accent} />
+              <View style={styles.optionTexts}>
+                <ThemedText type="smallBold" numberOfLines={1} style={styles.optionLabel}>
+                  {fromHour} a {toHour}
+                </ThemedText>
+                <ThemedText themeColor="textSecondary" numberOfLines={1} style={styles.metaLabel}>
+                  {windowSummary}
+                </ThemedText>
+              </View>
+              <Icon name="chevron.down" size={13} color={theme.textSecondary} />
+            </Pressable>
+          </View>
         </View>
 
         {offline ? (
@@ -363,9 +550,9 @@ export default function OrderConfirmScreen() {
             styles.confirmButton,
             { backgroundColor: theme.success, opacity: confirmDisabled ? 0.4 : 1 },
           ]}>
-          <Icon name="cart" size={16} color={theme.onSuccess} />
+          <Icon name={editing ? 'checkmark' : 'cart'} size={16} color={theme.onSuccess} />
           <ThemedText type="smallBold" style={{ color: theme.onSuccess }}>
-            Confirmar pedido · {formatBs(finalTotal)}
+            {editing ? 'Guardar cambios' : 'Confirmar pedido'} · {formatBs(finalTotal)}
           </ThemedText>
         </Pressable>
       </ScrollView>
@@ -377,6 +564,39 @@ export default function OrderConfirmScreen() {
         selectedId={selectedPointId}
         onSelect={(point) => setDeliveryPointId(point.id)}
       />
+
+      {/* The same calendar the tasks form uses, so a date is picked the same way everywhere in
+          the app. No minimum date: a delivery is always ahead, but the mock clock is not the
+          seller's, and blocking today would be the more confusing failure. */}
+      <DatePickerDialog
+        visible={dateSheetVisible}
+        value={fromDateKey(deliveryDate)}
+        title="Fecha de entrega"
+        onSelect={(date) => setDeliveryDate(toDateKey(date))}
+        onClose={() => setDateSheetVisible(false)}
+      />
+
+      <DeliveryWindowSheet
+        visible={windowSheetVisible}
+        onClose={() => setWindowSheetVisible(false)}
+        selectedFrom={fromHour}
+        selectedTo={toHour}
+        onSelect={(window) => {
+          setFromHour(window.from);
+          setToHour(window.to);
+        }}
+      />
+
+      {giftBonification ? (
+        <GiftProductSheet
+          visible
+          onClose={() => setGiftLineId(null)}
+          options={giftOptionsFor(giftBonification.productId)}
+          selectedId={giftBonification.giftProductId}
+          onSelect={(product) => chooseGift(giftBonification.productId, product)}
+          qtyLabel={`${giftBonification.qty} ${giftBonification.minUnitLabel}`}
+        />
+      ) : null}
     </View>
   );
 }
@@ -389,22 +609,66 @@ function SectionLabel({ children }: { children: string }) {
   );
 }
 
-/** One ordered quantity with the price it was agreed at, so the amount stays verifiable. */
-function QtyRow({ qty, unitLabel, unitPrice }: { qty: number; unitLabel: string; unitPrice: number }) {
+/**
+ * The free goods a line earned, or how far it is from earning any.
+ *
+ * The "not yet" case is shown on purpose rather than left blank: a seller who can see that
+ * four more pieces would earn a gift has a reason to go back and sell them, and that is the
+ * whole commercial point of showing bonifications before the order is closed.
+ */
+function GiftRow({
+  line,
+  bonification,
+  onChangeGift,
+}: {
+  line: CartLine;
+  bonification: LineBonification | null;
+  onChangeGift: () => void;
+}) {
+  const theme = useTheme();
+
+  // A line that earned nothing says nothing: the card is a record of what is being ordered,
+  // and an absent gift is not a fact about the product.
+  if (!bonification) return null;
+
   return (
-    <View style={styles.qtyRow}>
-      <ThemedText type="smallBold" style={styles.qtyText}>
-        {qty} {unitLabel}
-      </ThemedText>
-      <ThemedText themeColor="textSecondary" style={styles.qtyText}>
-        × {formatBs(unitPrice)}
-      </ThemedText>
-      <ThemedText themeColor="textSecondary" style={[styles.qtyText, styles.qtyAmount]}>
-        {formatBs(qty * unitPrice)}
-      </ThemedText>
+    <View style={[styles.giftCard, { backgroundColor: theme.successSoft }]}>
+      {/* What arrives, and nothing about which threshold produced it: the seller is closing an
+          order, not auditing the rule that fired. */}
+      <View style={styles.giftHeader}>
+        <Icon name="gift" size={13} color={theme.success} />
+        <ThemedText style={[styles.giftQty, { color: theme.success }]} numberOfLines={1}>
+          {bonification.qty} {bonification.minUnitLabel} de regalo
+        </ThemedText>
+      </View>
+
+      {/* Always offered, even for a product with no siblings: what arrives as free goods is a
+          decision the seller confirms with the client, so the row has to be openable to be
+          read back — a product with one option opens showing that option, already selected,
+          which answers "what am I getting?" instead of hiding the answer.
+
+          Labelled with the full product code and description, the same string the catalog
+          list shows. Not the flavor: flavor is one attribute of a product, and the thing
+          being chosen here is which product the warehouse ships. */}
+      <Pressable
+        onPress={onChangeGift}
+        style={[styles.giftSelect, { backgroundColor: theme.backgroundElement, borderColor: theme.success }]}>
+        <ThemedText type="smallBold" numberOfLines={1} style={styles.giftProduct}>
+          {bonification.giftProductId} - {bonification.giftProductName}
+        </ThemedText>
+        <Icon name="chevron.down" size={13} color={theme.success} />
+      </Pressable>
     </View>
   );
 }
+
+/** The gift's substitution options: the ordered product itself, then its flavor siblings. */
+function giftOptionsFor(productId: number): Product[] {
+  const product = mockProducts.find((candidate) => candidate.id === productId);
+  if (!product) return [];
+  return [product, ...suggestionsFor(product, mockProducts, 'flavor')];
+}
+
 
 function TotalRow({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
@@ -428,57 +692,6 @@ function FieldRow({ icon, label, value }: { icon: IconName; label: string; value
       <ThemedText type="smallBold" style={styles.fieldValue} numberOfLines={1}>
         {value}
       </ThemedText>
-    </View>
-  );
-}
-
-/** Icon + label + a horizontal row of small selectable chips. */
-function ChipPickerRow({
-  icon,
-  label,
-  options,
-  selected,
-  onSelect,
-}: {
-  icon: IconName;
-  label: string;
-  options: { key: string; label: string }[];
-  selected: string;
-  onSelect: (key: string) => void;
-}) {
-  const theme = useTheme();
-  return (
-    <View style={styles.pickerRow}>
-      <Icon name={icon} size={13} color={theme.textSecondary} />
-      <ThemedText themeColor="textSecondary" style={styles.pickerLabel}>
-        {label}
-      </ThemedText>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.pickerChips}>
-        {options.map((option) => {
-          const active = option.key === selected;
-          return (
-            <Pressable
-              key={option.key}
-              onPress={() => onSelect(option.key)}
-              style={[
-                styles.pickerChip,
-                {
-                  backgroundColor: active ? theme.accent : theme.background,
-                  borderColor: active ? theme.accent : theme.border,
-                },
-              ]}>
-              <ThemedText
-                type="smallBold"
-                style={[styles.pickerChipText, { color: active ? theme.onAccent : theme.textSecondary }]}>
-                {option.label}
-              </ThemedText>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
     </View>
   );
 }
@@ -520,25 +733,40 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     gap: 3,
   },
-  locationCard: {
+  // Gutters the ScrollView's own contentContainer used to provide, now that this card sits
+  // outside it.
+  pinned: {
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.two,
+  },
+  clientCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
   },
-  locationIcon: {
+  clientIcon: {
     width: 28,
     height: 28,
     borderRadius: Radius.sm,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  locationTexts: {
+  clientTexts: {
     flex: 1,
     gap: 1,
   },
-  coords: {
-    fontSize: 12,
-    fontVariant: ['tabular-nums'],
+  clientName: {
+    fontSize: 13,
+    // Explicit alongside every reduced font size in the app: `smallBold` carries
+    // lineHeight 20, so a smaller font on its own keeps the old row height.
+    lineHeight: 17,
+  },
+  orderMode: {
+    fontSize: 11,
+    // Was the biggest cost in this card: without a lineHeight, ThemedText's default type
+    // applies 24 whatever the fontSize is.
+    lineHeight: 15,
+    fontWeight: '700',
   },
   sectionLabel: {
     fontSize: 11,
@@ -551,11 +779,26 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingVertical: Spacing.two,
   },
+  /**
+   * An ordered product, marked off from every other card on the screen by the accent bar down
+   * its left edge. Without it a line item, the totals block and the billing block were the
+   * same rounded rectangle with the same border, and the only way to tell which was which was
+   * to read it.
+   *
+   * The three remaining sides are coloured individually rather than with `borderColor`: that
+   * shorthand sets all four, so it would paint over the left edge depending on which style
+   * object lands last.
+   */
   itemCard: {
     borderRadius: Radius.sm,
-    borderWidth: 1,
-    paddingVertical: 6,
-    paddingHorizontal: Spacing.two,
+    borderTopWidth: 1,
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
+    borderLeftWidth: 3,
+    paddingVertical: 5,
+    paddingRight: Spacing.two,
+    // The bar eats two points of the gutter, so the text starts where the other cards' does.
+    paddingLeft: Spacing.two - 2,
     gap: 1,
   },
   itemTop: {
@@ -567,41 +810,64 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
   },
-  sizePill: {
-    flexShrink: 0,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: Radius.pill,
-  },
-  sizeText: {
-    fontSize: 9,
-    fontWeight: '700',
-  },
   itemAmount: {
     fontSize: 12,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
-  qtyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
   qtyText: {
     fontSize: 10,
     fontVariant: ['tabular-nums'],
   },
-  qtyAmount: {
-    flex: 1,
-    textAlign: 'right',
-  },
   itemFooter: {
     flexDirection: 'row',
+    alignItems: 'baseline',
     justifyContent: 'space-between',
     gap: Spacing.two,
   },
   metaLabel: {
     fontSize: 10,
+  },
+  giftCard: {
+    marginTop: 4,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 5,
+    borderRadius: Radius.sm,
+    gap: 2,
+  },
+  giftHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  giftQty: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  giftSelect: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    marginTop: 3,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 4,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+  },
+  giftProduct: {
+    // The chevron keeps its own width at the right edge; the description takes the rest and
+    // truncates, since the leading code is what identifies it.
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  giftHint: {
+    marginTop: 2,
+    fontSize: 10,
+    lineHeight: 14,
+    fontStyle: 'italic',
   },
   totalRow: {
     flexDirection: 'row',
@@ -696,29 +962,57 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   deliveryCard: {
-    gap: 4,
+    gap: Spacing.two,
   },
-  pickerRow: {
+  deliveryField: {
+    gap: 5,
+  },
+  // A question, not a noun. "Desde" and "Hasta" were the whole reason the old rows read as
+  // hours belonging to nobody.
+  fieldCaption: {
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  dateRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: Spacing.two,
   },
-  pickerLabel: {
-    width: 46,
-    fontSize: 11,
+  dateChoices: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
   },
-  pickerChips: {
+  // Square, and the same side and size as the tasks form's calendar button.
+  dateButton: {
+    width: ControlHeight.input,
+    height: ControlHeight.input,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dateChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 4,
-    paddingVertical: 2,
-  },
-  pickerChip: {
     paddingHorizontal: ChipPadding.horizontal,
     paddingVertical: ChipPadding.vertical,
     borderRadius: Radius.pill,
     borderWidth: 1,
   },
-  pickerChipText: {
+  dateChipText: {
     fontSize: 11,
+    lineHeight: 15,
+  },
+  deliveryReadback: {
+    fontSize: 12,
+    lineHeight: 16,
+    textTransform: 'capitalize',
+  },
+  deliveryDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
   confirmButton: {
     flexDirection: 'row',

@@ -23,6 +23,9 @@ const ORDER_SHEET_HEADER_HEIGHT = 60;
 /** Fraction of the list area the sheet takes at its middle stop. */
 const HALF_RATIO = 0.5;
 
+/** How much of the product list is left uncovered at the tallest stop. */
+const FULL_PEEK_HEIGHT = Math.round(PRODUCT_CARD_HEIGHT / 3);
+
 /**
  * How far ahead a fling is projected when picking the stop to land on, in
  * seconds of travel at release velocity. Without it, a fast flick that barely
@@ -39,9 +42,10 @@ const SPRING = { damping: 22, stiffness: 220, mass: 0.7 } as const;
  */
 export function orderSheetHeights(availableHeight: number, bottomInset: number) {
   const collapsed = ORDER_SHEET_HEADER_HEIGHT + bottomInset;
-  // One product row stays visible at the tallest stop: proof the catalog is still
-  // there and was never navigated away from.
-  const full = Math.max(collapsed, availableHeight - PRODUCT_CARD_HEIGHT);
+  // A sliver of the first product row stays visible at the tallest stop: enough
+  // to prove the catalog is still there and was never navigated away from,
+  // without spending a whole row on it.
+  const full = Math.max(collapsed, availableHeight - FULL_PEEK_HEIGHT);
   const half = Math.min(Math.max(Math.round(availableHeight * HALF_RATIO), collapsed), full);
   return { collapsed, half, full };
 }
