@@ -4,11 +4,11 @@ import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { VisitTimer } from '@/components/client/visit-timer';
-import { CartSummaryBar } from '@/components/catalog/cart-bar';
 import { CategoriesSheet } from '@/components/catalog/categories-sheet';
 import { CategoryTiles } from '@/components/catalog/category-tiles';
 import { AlphabetIndex } from '@/components/catalog/alphabet-index';
 import { OrderPanel } from '@/components/catalog/order-panel';
+import { OrderSheet, orderSheetHeights, type OrderSheetSnap } from '@/components/catalog/order-sheet';
 import { ProductCard, PRODUCT_CARD_HEIGHT } from '@/components/catalog/product-card';
 import { ProductDetailSheet } from '@/components/product-detail/product-detail-sheet';
 import { ThemedText } from '@/components/themed-text';
@@ -30,8 +30,6 @@ import { useTheme } from '@/hooks/use-theme';
 import { CartLine, CatalogTabKey, Product } from '@/types/catalog';
 
 type IconName = ComponentProps<typeof Icon>['name'];
-
-const CART_SUMMARY_HEIGHT = 118;
 
 const TILES: {
   key: CatalogTabKey;
@@ -88,12 +86,31 @@ export default function CatalogScreen() {
   const [query, setQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [categoriesVisible, setCategoriesVisible] = useState(false);
-  const [showOrderPanel, setShowOrderPanel] = useState(false);
+  const [orderSnap, setOrderSnap] = useState<OrderSheetSnap>('collapsed');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [editingLine, setEditingLine] = useState<CartLine | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
+  // Measured rather than assumed: the sheet's stops are fractions of the list
+  // area, which is whatever is left after the header and the controls above it.
+  const [listAreaHeight, setListAreaHeight] = useState(0);
 
   const listRef = useRef<FlatList<Product>>(null);
+
+  const sheetHeights = orderSheetHeights(listAreaHeight, insets.bottom);
+
+  /**
+   * How much room the list leaves for the sheet. It tracks the stop the sheet is
+   * resting at, not its live height: settled state changes three times, so the
+   * last rows never shuffle under the finger mid-drag, but they can always be
+   * scrolled clear of the sheet once it lands.
+   *
+   * Capped at the middle stop on purpose. At the tallest one the list is down to
+   * a single peeking row and the seller is reviewing the order, not browsing —
+   * padding by the full sheet there would strand the list under a screenful of
+   * blank space the moment they collapsed it again.
+   */
+  const listBottomInset =
+    orderSnap === 'collapsed' ? sheetHeights.collapsed : sheetHeights.half;
 
   const baseList =
     activeTab === 'normales' ? mockProducts : activeTab === 'ultimos' ? ultimosVendidosProducts : estrategiaProducts;
@@ -168,11 +185,11 @@ export default function CatalogScreen() {
     });
   };
 
-  // Switching list always returns to the catalog: a tab press only ever changes
-  // which products are shown, never doubles as a second action.
+  // Switching list gets the products out from under the order: a tab press only
+  // ever changes which products are shown, never doubles as a second action.
   const handleTilePress = (key: CatalogTabKey) => {
     setActiveTab(key);
-    setShowOrderPanel(false);
+    setOrderSnap('collapsed');
   };
 
   return (
@@ -206,143 +223,127 @@ export default function CatalogScreen() {
       <View style={styles.controls}>
         <CategoryTiles tiles={TILES} activeKey={activeTab} onChange={handleTilePress} />
 
-        {/* Search and list controls only describe the product list, so they step
-            aside while the order panel is what's on screen. */}
-        {showOrderPanel ? (
-          <View style={styles.metaRow}>
-            <ThemedText type="small" themeColor="textSecondary" style={styles.metaCount}>
-              Detalle del pedido
-            </ThemedText>
-            <ActionPill
-              icon="chevron.left"
-              label="Volver al catálogo"
-              onPress={() => setShowOrderPanel(false)}
+        {/* These describe the product list, and the product list is now always on
+            screen — so they stay put. Swapping them out for the order used to be
+            half of why moving between the two read as leaving the screen. */}
+        <View style={styles.searchRow}>
+          <View style={[styles.searchBox, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+            <Icon name="magnifyingglass" size={15} color={theme.textSecondary} />
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder={`Buscar en ${TAB_LABELS[activeTab]}`}
+              placeholderTextColor={theme.textSecondary}
+              style={[styles.searchInput, { color: theme.text }]}
             />
-          </View>
-        ) : (
-          <>
-            <View style={styles.searchRow}>
-              <View style={[styles.searchBox, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-                <Icon name="magnifyingglass" size={15} color={theme.textSecondary} />
-                <TextInput
-                  value={query}
-                  onChangeText={setQuery}
-                  placeholder={`Buscar en ${TAB_LABELS[activeTab]}`}
-                  placeholderTextColor={theme.textSecondary}
-                  style={[styles.searchInput, { color: theme.text }]}
-                />
-                {query.length > 0 ? (
-                  <Pressable hitSlop={8} onPress={() => setQuery('')}>
-                    <Icon name="xmark" size={13} color={theme.textSecondary} />
-                  </Pressable>
-                ) : null}
-              </View>
-              {/* Filter entry point. It carries the accent while a category is applied,
-                  so an active filter is visible even before reading the chip below. */}
-              <Pressable
-                onPress={() => setCategoriesVisible(true)}
-                style={[
-                  styles.filterButton,
-                  categoryFilter
-                    ? { backgroundColor: theme.accent, borderColor: theme.accent }
-                    : { backgroundColor: theme.backgroundElement, borderColor: theme.border },
-                ]}>
-                <Icon
-                  name="line.3.horizontal.decrease"
-                  size={15}
-                  color={categoryFilter ? theme.onAccent : theme.text}
-                />
+            {query.length > 0 ? (
+              <Pressable hitSlop={8} onPress={() => setQuery('')}>
+                <Icon name="xmark" size={13} color={theme.textSecondary} />
               </Pressable>
-            </View>
-
-            {/* Active category — the previous design filtered with no visible trace of it. */}
-            {categoryFilter ? (
-              <View style={styles.filterChipRow}>
-                <Pressable
-                  onPress={() => setCategoryFilter(null)}
-                  style={[styles.filterChip, { backgroundColor: theme.accentSoft }]}>
-                  <ThemedText
-                    type="smallBold"
-                    numberOfLines={1}
-                    style={[styles.filterChipText, { color: theme.accent }]}>
-                    {categoryFilter}
-                  </ThemedText>
-                  <Icon name="xmark" size={11} color={theme.accent} />
-                </Pressable>
-              </View>
             ) : null}
+          </View>
+          {/* Filter entry point. It carries the accent while a category is applied,
+              so an active filter is visible even before reading the chip below. */}
+          <Pressable
+            onPress={() => setCategoriesVisible(true)}
+            style={[
+              styles.filterButton,
+              categoryFilter
+                ? { backgroundColor: theme.accent, borderColor: theme.accent }
+                : { backgroundColor: theme.backgroundElement, borderColor: theme.border },
+            ]}>
+            <Icon
+              name="line.3.horizontal.decrease"
+              size={15}
+              color={categoryFilter ? theme.onAccent : theme.text}
+            />
+          </Pressable>
+        </View>
 
-            <View style={styles.metaRow}>
-              <ThemedText type="small" themeColor="textSecondary" style={styles.metaCount}>
-                {filtered.length} {filtered.length === 1 ? 'producto' : 'productos'}
+        {/* Active category — the previous design filtered with no visible trace of it. */}
+        {categoryFilter ? (
+          <View style={styles.filterChipRow}>
+            <Pressable
+              onPress={() => setCategoryFilter(null)}
+              style={[styles.filterChip, { backgroundColor: theme.accentSoft }]}>
+              <ThemedText
+                type="smallBold"
+                numberOfLines={1}
+                style={[styles.filterChipText, { color: theme.accent }]}>
+                {categoryFilter}
               </ThemedText>
-              <ActionPill icon="doc.on.doc" label="Duplicar pedido" onPress={handleDuplicate} />
-              <ActionPill
-                icon={sortAsc ? 'chevron.down' : 'chevron.up'}
-                label={sortAsc ? 'A-Z' : 'Z-A'}
-                onPress={() => setSortAsc((v) => !v)}
-              />
-            </View>
-          </>
-        )}
-      </View>
+              <Icon name="xmark" size={11} color={theme.accent} />
+            </Pressable>
+          </View>
+        ) : null}
 
-      <View style={styles.listWrapper}>
-        {showOrderPanel ? (
-          <OrderPanel
-            contentPaddingBottom={insets.bottom + Spacing.three}
-            onContinue={goToSummary}
-            onEditLine={handleEditLine}
-          />
-        ) : (
-          <>
-            <FlatList
-              ref={listRef}
-              data={filtered}
-              keyExtractor={(item) => String(item.id)}
-              renderItem={({ item }) => <ProductCard product={item} onPress={setSelectedProduct} />}
-              getItemLayout={(_, index) => ({ length: PRODUCT_CARD_HEIGHT, offset: PRODUCT_CARD_HEIGHT * index, index })}
-              onScrollToIndexFailed={(info) => {
-                listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true });
-              }}
-              contentContainerStyle={[
-                styles.listContent,
-                { paddingBottom: CART_SUMMARY_HEIGHT + insets.bottom + Spacing.three },
-              ]}
-              showsVerticalScrollIndicator={false}
-              ListEmptyComponent={
-                <View style={styles.emptyState}>
-                  <View style={[styles.emptyIconWrap, { backgroundColor: theme.backgroundSelected }]}>
-                    <Icon name="magnifyingglass" size={22} color={theme.textSecondary} />
-                  </View>
-                  <ThemedText type="smallBold" style={styles.emptyText}>
-                    No se encontraron productos
-                  </ThemedText>
-                  <ThemedText themeColor="textSecondary" type="small" style={styles.emptyText}>
-                    Probá con otra búsqueda o categoría
-                  </ThemedText>
-                </View>
-              }
-            />
-            <AlphabetIndex
-              availableLetters={availableLetters}
-              onSelect={scrollToLetter}
-              bottomInset={CART_SUMMARY_HEIGHT + insets.bottom}
-              reversed={!sortAsc}
-            />
-          </>
-        )}
-      </View>
-
-      {!showOrderPanel ? (
-        <View style={[styles.cartBarWrapper, { bottom: 0, paddingBottom: insets.bottom }]}>
-          <CartSummaryBar
-            productCount={cart.productCount}
-            totalAmount={cart.totalAmount}
-            onPress={() => setShowOrderPanel((v) => !v)}
+        <View style={styles.metaRow}>
+          <ThemedText type="small" themeColor="textSecondary" style={styles.metaCount}>
+            {filtered.length} {filtered.length === 1 ? 'producto' : 'productos'}
+          </ThemedText>
+          <ActionPill icon="doc.on.doc" label="Duplicar pedido" onPress={handleDuplicate} />
+          <ActionPill
+            icon={sortAsc ? 'chevron.down' : 'chevron.up'}
+            label={sortAsc ? 'A-Z' : 'Z-A'}
+            onPress={() => setSortAsc((v) => !v)}
           />
         </View>
-      ) : null}
+      </View>
+
+      {/* The list is never unmounted now: the order slides over it. That is what
+          makes both halves read as one screen instead of two. */}
+      <View
+        style={styles.listWrapper}
+        onLayout={(event) => setListAreaHeight(event.nativeEvent.layout.height)}>
+        <FlatList
+          ref={listRef}
+          data={filtered}
+          keyExtractor={(item) => String(item.id)}
+          renderItem={({ item }) => <ProductCard product={item} onPress={setSelectedProduct} />}
+          getItemLayout={(_, index) => ({ length: PRODUCT_CARD_HEIGHT, offset: PRODUCT_CARD_HEIGHT * index, index })}
+          onScrollToIndexFailed={(info) => {
+            listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true });
+          }}
+          contentContainerStyle={[
+            styles.listContent,
+            { paddingBottom: listBottomInset + Spacing.three },
+          ]}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <View style={[styles.emptyIconWrap, { backgroundColor: theme.backgroundSelected }]}>
+                <Icon name="magnifyingglass" size={22} color={theme.textSecondary} />
+              </View>
+              <ThemedText type="smallBold" style={styles.emptyText}>
+                No se encontraron productos
+              </ThemedText>
+              <ThemedText themeColor="textSecondary" type="small" style={styles.emptyText}>
+                Probá con otra búsqueda o categoría
+              </ThemedText>
+            </View>
+          }
+        />
+        <AlphabetIndex
+          availableLetters={availableLetters}
+          onSelect={scrollToLetter}
+          bottomInset={listBottomInset}
+          reversed={!sortAsc}
+        />
+      </View>
+
+      <OrderSheet
+        snap={orderSnap}
+        onSnapChange={setOrderSnap}
+        availableHeight={listAreaHeight}
+        bottomInset={insets.bottom}
+        productCount={cart.productCount}
+        totalAmount={cart.totalAmount}>
+        <OrderPanel
+          contentPaddingBottom={Spacing.three}
+          onContinue={goToSummary}
+          onEditLine={handleEditLine}
+        />
+      </OrderSheet>
 
       <CategoriesSheet
         visible={categoriesVisible}
@@ -501,10 +502,5 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     textAlign: 'center',
-  },
-  cartBarWrapper: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
   },
 });
