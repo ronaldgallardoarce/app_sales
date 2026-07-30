@@ -8,7 +8,6 @@ import Animated, {
   withSpring,
 } from 'react-native-reanimated';
 
-import { PRODUCT_CARD_HEIGHT } from '@/components/catalog/product-card';
 import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
 import { FloatingShadow, Radius, Spacing } from '@/constants/theme';
@@ -22,9 +21,6 @@ const ORDER_SHEET_HEADER_HEIGHT = 60;
 
 /** Fraction of the list area the sheet takes at its middle stop. */
 const HALF_RATIO = 0.5;
-
-/** How much of the product list is left uncovered at the tallest stop. */
-const FULL_PEEK_HEIGHT = Math.round(PRODUCT_CARD_HEIGHT / 3);
 
 /**
  * How far ahead a fling is projected when picking the stop to land on, in
@@ -40,12 +36,25 @@ const SPRING = { damping: 22, stiffness: 220, mass: 0.7 } as const;
  * pads the product list so the last row clears the sheet — so they are derived
  * here once instead of being recomputed, and drifting, in two places.
  */
-export function orderSheetHeights(availableHeight: number, bottomInset: number) {
+export function orderSheetHeights(
+  availableHeight: number,
+  bottomInset: number,
+  /**
+   * How far past the top of the list area the tallest stop is allowed to climb.
+   *
+   * The sheet is anchored to the bottom of the screen, so this is the caller's way of saying how
+   * much of what sits *above* the list — search box, filter chip, counts — the order may cover on
+   * its way up. Measured by the catalog and passed in rather than assumed here, because what is
+   * above the list is the catalog's business and it changes with the screen: the filter chip row
+   * only exists while a category is applied.
+   */
+  reachAboveList: number = 0,
+) {
   const collapsed = ORDER_SHEET_HEADER_HEIGHT + bottomInset;
-  // A sliver of the first product row stays visible at the tallest stop: enough
-  // to prove the catalog is still there and was never navigated away from,
-  // without spending a whole row on it.
-  const full = Math.max(collapsed, availableHeight - FULL_PEEK_HEIGHT);
+  // No peek of the product list is kept at the tallest stop any more. It used to leave a third of
+  // a row showing as proof the catalog was still behind — but the category tabs now stay uncovered
+  // above the sheet at every stop, and they say the same thing without spending list height on it.
+  const full = Math.max(collapsed, availableHeight + reachAboveList);
   const half = Math.min(Math.max(Math.round(availableHeight * HALF_RATIO), collapsed), full);
   return { collapsed, half, full };
 }

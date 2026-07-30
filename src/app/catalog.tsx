@@ -112,9 +112,24 @@ export default function CatalogScreen() {
   // area, which is whatever is left after the header and the controls above it.
   const [listAreaHeight, setListAreaHeight] = useState(0);
 
+  /**
+   * The controls block, and where the category tabs end inside it — the two measurements that let
+   * the sheet stop exactly under the tabs at its tallest.
+   *
+   * Taken rather than computed. The distance from the bottom of the tabs to the top of the list is
+   * a stack of paddings, gaps and one row that only exists while a category filter is applied, so
+   * deriving it from the style constants would be a second copy of the layout that goes wrong the
+   * first time anyone adds a control. `onLayout` reports where things actually landed.
+   */
+  const [controlsHeight, setControlsHeight] = useState(0);
+  const [tabsBottom, setTabsBottom] = useState(0);
+
   const listRef = useRef<FlatList<Product>>(null);
 
-  const sheetHeights = orderSheetHeights(listAreaHeight, insets.bottom);
+  /** Everything between the tabs and the list — what the order is allowed to climb over. */
+  const reachAboveList = Math.max(controlsHeight - tabsBottom, 0);
+
+  const sheetHeights = orderSheetHeights(listAreaHeight, insets.bottom, reachAboveList);
 
   /**
    * How much room the list leaves for the sheet. It tracks the stop the sheet is
@@ -122,10 +137,10 @@ export default function CatalogScreen() {
    * last rows never shuffle under the finger mid-drag, but they can always be
    * scrolled clear of the sheet once it lands.
    *
-   * Capped at the middle stop on purpose. At the tallest one the list is down to
-   * a peeking sliver and the seller is reviewing the order, not browsing —
-   * padding by the full sheet there would strand the list under a screenful of
-   * blank space the moment they collapsed it again.
+   * Capped at the middle stop on purpose. At the tallest one the list is covered
+   * outright and the seller is reviewing the order, not browsing — padding by the
+   * full sheet there would strand the list under a screenful of blank space the
+   * moment they collapsed it again.
    */
   const listBottomInset =
     orderSnap === 'collapsed' ? sheetHeights.collapsed : sheetHeights.half;
@@ -290,8 +305,14 @@ export default function CatalogScreen() {
         </View>
       ) : null}
 
-      <View style={styles.controls}>
-        <CategoryTiles tiles={TILES} activeKey={activeTab} onChange={handleTilePress} />
+      <View
+        style={styles.controls}
+        onLayout={(event) => setControlsHeight(event.nativeEvent.layout.height)}>
+        {/* Wrapped only to be measured: the tabs are the one control the order never covers, so
+            where they end is where the sheet's tallest stop has to stop. */}
+        <View onLayout={(event) => setTabsBottom(event.nativeEvent.layout.y + event.nativeEvent.layout.height)}>
+          <CategoryTiles tiles={TILES} activeKey={activeTab} onChange={handleTilePress} />
+        </View>
 
         {/* These describe the product list, and the product list is now always on
             screen — so they stay put. Swapping them out for the order used to be

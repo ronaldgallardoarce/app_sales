@@ -8,7 +8,7 @@ import { deliveryDateLabel } from '@/data/mock-order-details';
 // ORDER_STATUS_META goes with the commented-out status pill below.
 import {
   canEditOrder,
-  editHoursLeft,
+  editTimeLeftLabel,
   EDIT_WINDOW_HOURS,
   type PlacedOrder,
 } from '@/data/mock-orders';
@@ -40,10 +40,18 @@ export function OrderDetailSheet({
   if (!order) return null;
 
   // const meta = ORDER_STATUS_META[order.status]; // with the status pill below
-  // Evaluated on open rather than on a timer: the window is 48 hours wide, so a sheet going
-  // stale while the seller reads it is not a case worth a ticking clock.
+  /**
+   * Evaluated on open, not on a timer — and at a two-hour window that is now a real, if small,
+   * approximation rather than a free one.
+   *
+   * While the window was two days wide, a sheet could be left open for an entire lunch and still
+   * be telling the truth. At two hours the countdown below drifts by however long the sheet stays
+   * up, and an order read at the very edge of its window can have the button live for a minute
+   * after it closed. Worth a ticking clock if the rule tightens further or the window is ever
+   * shown on the list rows; not worth one for a sheet that is open for seconds at a time.
+   */
   const editable = canEditOrder(order);
-  const hoursLeft = editHoursLeft(order);
+  const timeLeft = editTimeLeftLabel(order);
 
   return (
     <BottomSheet visible onClose={onClose} maxHeight={620}>
@@ -167,9 +175,9 @@ export function OrderDetailSheet({
           </View>
         </View>
 
-        {/* Editing closes 48 hours after the order was taken. The button stays visible once it
-            expires rather than disappearing: a seller who cannot find it does not know whether
-            the feature is missing or the window is closed, so it says which. */}
+        {/* Editing closes a couple of hours after the order was taken. The button stays visible
+            once it expires rather than disappearing: a seller who cannot find it does not know
+            whether the feature is missing or the window is closed, so it says which. */}
         <View style={styles.actions}>
           <Pressable
             disabled={!editable}
@@ -199,7 +207,7 @@ export function OrderDetailSheet({
 
         <ThemedText themeColor="textSecondary" style={styles.editHint}>
           {editable
-            ? `Se puede editar por ${hoursLeft} ${hoursLeft === 1 ? 'hora' : 'horas'} más.`
+            ? `Se puede editar por ${timeLeft} más.`
             : `Los pedidos se editan dentro de las ${EDIT_WINDOW_HOURS} horas de creados.`}
         </ThemedText>
       </ScrollView>

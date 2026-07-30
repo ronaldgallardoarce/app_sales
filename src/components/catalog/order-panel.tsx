@@ -127,10 +127,10 @@ export function OrderPanel({
                 borderLeftColor: theme.accent,
               },
             ]}>
-            {/* Three rows, fixed: what it is, how much of it, what it costs. The name
+            {/* Two rows: what it is, then what it costs and what backs that up. The name
                 owns its row outright — it is the only thing the seller reads to know
                 the line is the right one, and it is what gets truncated first when it
-                has to share the row with amounts. */}
+                has to share the row with the delete button. */}
             <View style={styles.lineTop}>
               <ThemedText type="smallBold" numberOfLines={1} style={styles.lineName}>
                 {line.productName}
@@ -143,16 +143,15 @@ export function OrderPanel({
               </Pressable>
             </View>
 
-            {/* Both unit types share one row, and each only appears when it was
-                actually ordered — a case-only line reads as just the cases. Prices
-                travel with the quantities so the amount below stays verifiable. */}
-            <ThemedText themeColor="textSecondary" numberOfLines={1} style={styles.qtyText}>
-              {lineQtyDetail(line)}
-            </ThemedText>
-
+            {/* Quantities and ICE on one row, separated the same way the two unit types
+                already separate from each other: both are the small print behind the amount,
+                and each was spending a whole line on a handful of characters. Each unit type
+                still only appears when it was actually ordered — a case-only line reads as
+                just the cases. The quantities lead, so a line too narrow for all of it
+                truncates the tax rather than the count. */}
             <View style={styles.lineBottom}>
-              <ThemedText themeColor="textSecondary" style={styles.lineMeta}>
-                ICE {formatBs(lineIce(line))}
+              <ThemedText themeColor="textSecondary" numberOfLines={1} style={styles.lineMeta}>
+                {lineQtyDetail(line)} · ICE {formatBs(lineIce(line))}
               </ThemedText>
               <ThemedText style={[styles.lineSubtotal, { color: theme.success }]} numberOfLines={1}>
                 {formatBs(lineAmount(line))}
@@ -331,9 +330,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
+  /**
+   * Every line of a cart row carries an explicit lineHeight, and that is where the row's height
+   * actually went.
+   *
+   * `ThemedText` sets a lineHeight per type and nothing else changes it, so a row that overrode
+   * only `fontSize` kept the box of the size it no longer was: these render at 10 and 12 points
+   * inside the default type's 24-point line, which is ten to fourteen points of empty space per
+   * row on every line of the cart. Naming the lineHeight beside each size is what the rest of
+   * this file's reduced sizes already do.
+   */
   lineName: {
     flex: 1,
     fontSize: 12,
+    lineHeight: 16,
   },
   lineBottom: {
     flexDirection: 'row',
@@ -342,15 +352,17 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   lineMeta: {
+    // Takes the row and truncates, so the amount beside it keeps its full width.
+    flex: 1,
     fontSize: 10,
-  },
-  lineSubtotal: {
-    fontSize: 12,
-    fontWeight: '700',
+    lineHeight: 14,
     fontVariant: ['tabular-nums'],
   },
-  qtyText: {
-    fontSize: 10,
+  lineSubtotal: {
+    flexShrink: 0,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
   iconButton: {
