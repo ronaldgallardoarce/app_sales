@@ -18,6 +18,7 @@ import { OfflineBadge } from '@/components/ui/offline-badge';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
 import { useClientVisits } from '@/context/client-visit-context';
+import { useOrderIncentives } from '@/context/order-incentives-context';
 import type { PaymentMethod } from '@/data/mock-incentives';
 import {
   estrategiaProducts,
@@ -66,8 +67,15 @@ export default function CatalogScreen() {
   const router = useRouter();
   const cart = useCart();
   const dialog = useDialog();
+  const { reset: resetIncentives } = useOrderIncentives();
   const insets = useContentInsets();
-  const { clientId } = useLocalSearchParams<{ clientId?: string }>();
+  // `editOrderId` is set only when the catalog was opened to amend a placed order. It is carried
+  // straight through to the summary rather than acted on here: this screen builds a cart either
+  // way, and only the save at the end differs.
+  const { clientId, editOrderId } = useLocalSearchParams<{
+    clientId?: string;
+    editOrderId?: string;
+  }>();
   const { clients } = useClientVisits();
 
   // Resolved from the route param, not from mock data: this header used to name a
@@ -79,14 +87,24 @@ export default function CatalogScreen() {
   const goToSummary = (paymentMethod: PaymentMethod) =>
     router.push({
       pathname: '/order-confirm',
-      params: { ...(clientId ? { clientId } : {}), paymentMethod },
+      params: {
+        ...(clientId ? { clientId } : {}),
+        ...(editOrderId ? { editOrderId } : {}),
+        paymentMethod,
+      },
     } as Href);
 
   const [activeTab, setActiveTab] = useState<CatalogTabKey>('normales');
   const [query, setQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [categoriesVisible, setCategoriesVisible] = useState(false);
-  const [orderSnap, setOrderSnap] = useState<OrderSheetSnap>('collapsed');
+  /**
+   * Opens half and half. The screen's whole point is that the catalog and the order are one view,
+   * and opening with the order collapsed to its header hid that — a seller had to discover the
+   * sheet before knowing the order was even there. Half is also the stop they can act from
+   * without moving anything: products above, the order building below.
+   */
+  const [orderSnap, setOrderSnap] = useState<OrderSheetSnap>('half');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [editingLine, setEditingLine] = useState<CartLine | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
@@ -105,7 +123,7 @@ export default function CatalogScreen() {
    * scrolled clear of the sheet once it lands.
    *
    * Capped at the middle stop on purpose. At the tallest one the list is down to
-   * a single peeking row and the seller is reviewing the order, not browsing —
+   * a peeking sliver and the seller is reviewing the order, not browsing —
    * padding by the full sheet there would strand the list under a screenful of
    * blank space the moment they collapsed it again.
    */
@@ -185,11 +203,43 @@ export default function CatalogScreen() {
     });
   };
 
-  // Switching list gets the products out from under the order: a tab press only
-  // ever changes which products are shown, never doubles as a second action.
+  /**
+   * A tab press changes which products are shown and nothing else — which is what the old comment
+   * here claimed while the code also collapsed the order sheet. Now that the screen opens half and
+   * half, collapsing would have thrown that away on the first tab press and left no way back to it
+   * but a drag. Where the sheet sits is the seller's choice; the tabs do not get a vote.
+   */
   const handleTilePress = (key: CatalogTabKey) => {
     setActiveTab(key);
-    setOrderSnap('collapsed');
+  };
+
+  /**
+   * Abandons an edit. Empties the cart on the way out, because it holds the placed order's lines
+   * and leaving them behind is exactly how a half-abandoned edit turns into an accidental new
+   * order the next time the catalog is opened.
+   */
+  const cancelEdit = () => {
+    dialog.show({
+      icon: 'xmark.circle.fill',
+      tone: 'accentAlt',
+      title: '¿Salir sin guardar?',
+      message: `Los cambios en ${editOrderId} se descartan. El pedido queda como estaba.`,
+      actions: [
+        { label: 'Seguir editando', variant: 'outline' },
+        {
+          label: 'Salir',
+          variant: 'primary',
+          tone: 'accentAlt',
+          onPress: () => {
+            cart.clearCart();
+            resetIncentives();
+            // Dismisses back to the list this edit started from rather than stacking a second
+            // copy of it on top of the catalog we are leaving.
+            router.dismissTo('/orders' as Href);
+          },
+        },
+      ],
+    });
   };
 
   return (
@@ -219,6 +269,26 @@ export default function CatalogScreen() {
           {clientId ? <VisitTimer clientId={clientId} compact /> : null}
         </View>
       </SafeAreaView>
+
+      {/* Amending a placed order looks exactly like building a new one, so it has to say so. It
+          also needs a way out: the cart was loaded with the order's lines, and walking away with
+          the back arrow would leave them sitting there looking like a new order. */}
+      {editOrderId ? (
+        <View style={styles.editBanner}>
+          <View style={[styles.editPill, { backgroundColor: theme.accentAltSoft }]}>
+            <Icon name="pencil" size={12} color={theme.accentAlt} />
+            <ThemedText
+              type="smallBold"
+              numberOfLines={1}
+              style={[styles.editPillText, { color: theme.accentAlt }]}>
+              Editando {editOrderId}
+            </ThemedText>
+            <Pressable hitSlop={8} onPress={cancelEdit}>
+              <Icon name="xmark" size={12} color={theme.accentAlt} />
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       <View style={styles.controls}>
         <CategoryTiles tiles={TILES} activeKey={activeTab} onChange={handleTilePress} />
@@ -281,7 +351,7 @@ export default function CatalogScreen() {
           <ThemedText type="small" themeColor="textSecondary" style={styles.metaCount}>
             {filtered.length} {filtered.length === 1 ? 'producto' : 'productos'}
           </ThemedText>
-          <ActionPill icon="doc.on.doc" label="Duplicar pedido" onPress={handleDuplicate} />
+          <ActionPill icon="doc.on.doc" label="Duplicar ult. pedido" onPress={handleDuplicate} />
           <ActionPill
             icon={sortAsc ? 'chevron.down' : 'chevron.up'}
             label={sortAsc ? 'A-Z' : 'Z-A'}
@@ -406,6 +476,25 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 18,
+  },
+  editBanner: {
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.two,
+  },
+  // Amber, the app's colour for "pay attention to this", and self-sized rather than full width so
+  // it reads as a state the screen is in and not as an error.
+  editPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+  },
+  editPillText: {
+    fontSize: 11,
+    lineHeight: 15,
   },
   controls: {
     paddingHorizontal: Spacing.three,

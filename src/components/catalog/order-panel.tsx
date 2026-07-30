@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { useDialog } from '@/components/ui/dialog';
 import { Icon } from '@/components/ui/icon';
@@ -7,10 +7,11 @@ import { ThemedText } from '@/components/themed-text';
 import { ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
 import { useConnectivity } from '@/context/connectivity-context';
+import { useOrderIncentives } from '@/context/order-incentives-context';
 import { PAYMENT_METHODS, type PaymentMethod } from '@/data/mock-incentives';
 import { useTheme } from '@/hooks/use-theme';
 import type { CartLine } from '@/types/catalog';
-import { lineAmount } from '@/utils/order';
+import { lineAmount, lineIce, lineQtyDetail } from '@/utils/order';
 import { formatBs } from '@/utils/currency';
 
 export function OrderPanel({
@@ -30,13 +31,66 @@ export function OrderPanel({
 }) {
   const theme = useTheme();
   const dialog = useDialog();
-  const { lines, removeLine, totalAmount } = useCart();
+  const { lines, removeLine, clearCart, totalAmount } = useCart();
   const { offline } = useConnectivity();
+  const { status, request, reset: resetIncentives } = useOrderIncentives();
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Contado');
 
+  const emptyCart = lines.length === 0;
   // Discounts and bonifications are resolved server-side, so there is nothing to
   // continue to while offline.
-  const continueDisabled = lines.length === 0 || offline;
+  const continueDisabled = emptyCart || offline;
+  const pricing = status === 'loading';
+
+  /**
+   * Resolve the order's incentives, then move on. Awaited rather than fired and forgotten so
+   * the summary opens with the reply already in hand instead of rendering an empty shell and
+   * filling in underneath the seller.
+   */
+  const handleApplyIncentives = async () => {
+    const resolved = await request(lines, paymentMethod, totalAmount);
+    if (!resolved) {
+      // Stays on the cart. Opening the summary with no reply would show it falling back to a
+      // locally guessed discount, which looks like an answer and is not one.
+      dialog.show({
+        icon: 'exclamationmark.circle',
+        tone: 'danger',
+        title: 'No se pudieron calcular los descuentos',
+        message: 'No hubo respuesta del servicio. Revisá la conexión y volvé a intentarlo.',
+      });
+      return;
+    }
+    onContinue?.(paymentMethod);
+  };
+
+  /**
+   * Emptying the order is the one action here that destroys work, and the cart has no undo, so
+   * it asks first. The confirming action carries the count: "Quitar 7 productos" is a different
+   * decision from "Quitar 1", and the number is what the seller checks before agreeing.
+   */
+  const handleClearCart = () => {
+    dialog.show({
+      icon: 'trash',
+      tone: 'danger',
+      title: '¿Vaciar el pedido?',
+      message: 'Se quitarán todos los productos de la lista. No se puede deshacer.',
+      actions: [
+        { label: 'Cancelar', variant: 'outline' },
+        {
+          label: `Quitar ${lines.length} ${lines.length === 1 ? 'producto' : 'productos'}`,
+          variant: 'primary',
+          tone: 'danger',
+          onPress: () => {
+            clearCart();
+            // The pricing reply describes the lines that just went away, and it is keyed by
+            // product code, so leaving it behind would let a rebuilt order inherit the old
+            // order's discounts and free goods.
+            resetIncentives();
+          },
+        },
+      ],
+    });
+  };
 
   const handleSavePreorder = () => {
     dialog.show({
@@ -63,20 +117,23 @@ export function OrderPanel({
           <Pressable
             key={String(line.productId)}
             onPress={() => onEditLine?.(line)}
-            style={[styles.line, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+            style={[
+              styles.line,
+              {
+                backgroundColor: theme.backgroundElement,
+                borderTopColor: theme.border,
+                borderRightColor: theme.border,
+                borderBottomColor: theme.border,
+                borderLeftColor: theme.accent,
+              },
+            ]}>
+            {/* Three rows, fixed: what it is, how much of it, what it costs. The name
+                owns its row outright — it is the only thing the seller reads to know
+                the line is the right one, and it is what gets truncated first when it
+                has to share the row with amounts. */}
             <View style={styles.lineTop}>
               <ThemedText type="smallBold" numberOfLines={1} style={styles.lineName}>
                 {line.productName}
-              </ThemedText>
-              {line.sizeLabel ? (
-                <View style={[styles.sizePill, { backgroundColor: theme.backgroundSelected }]}>
-                  <ThemedText style={[styles.sizeText, { color: theme.textSecondary }]}>
-                    {line.sizeLabel}
-                  </ThemedText>
-                </View>
-              ) : null}
-              <ThemedText style={[styles.lineSubtotal, { color: theme.success }]} numberOfLines={1}>
-                {formatBs(lineAmount(line))}
               </ThemedText>
               <Pressable
                 hitSlop={8}
@@ -86,32 +143,47 @@ export function OrderPanel({
               </Pressable>
             </View>
 
-            {/* Each unit type only appears when it was actually ordered, so a case-only
-                line does not show an empty loose-piece row. */}
-            {line.qtyMax > 0 ? (
-              <QtyRow qty={line.qtyMax} unitLabel={line.maxUnitLabel} unitPrice={line.unitPriceMax} />
-            ) : null}
-            {line.qtyMin > 0 ? (
-              <QtyRow qty={line.qtyMin} unitLabel={line.minUnitLabel} unitPrice={line.unitPriceMin} />
-            ) : null}
-
-            <ThemedText themeColor="textSecondary" style={styles.lineMeta}>
-              ICE {formatBs(line.ice)}
+            {/* Both unit types share one row, and each only appears when it was
+                actually ordered — a case-only line reads as just the cases. Prices
+                travel with the quantities so the amount below stays verifiable. */}
+            <ThemedText themeColor="textSecondary" numberOfLines={1} style={styles.qtyText}>
+              {lineQtyDetail(line)}
             </ThemedText>
+
+            <View style={styles.lineBottom}>
+              <ThemedText themeColor="textSecondary" style={styles.lineMeta}>
+                ICE {formatBs(lineIce(line))}
+              </ThemedText>
+              <ThemedText style={[styles.lineSubtotal, { color: theme.success }]} numberOfLines={1}>
+                {formatBs(lineAmount(line))}
+              </ThemedText>
+            </View>
           </Pressable>
         ))
       )}
 
-      {/* Totals sit directly under the cart: the running subtotal belongs to the
-          list of products, not to the payment terms chosen further down. */}
-      <View style={[styles.totalsSection, { borderTopColor: theme.border }]}>
-        <View style={styles.totalRow}>
-          <ThemedText themeColor="textSecondary" type="small">
-            Productos
+      {/* Sits with the list it empties, not down with the footer buttons: given the same width
+          and weight as "Aplicar descuentos" it would read as an equal next step, and it is the
+          only control here that throws work away. Right-aligned and quiet, reachable but never
+          the thing the thumb lands on by accident. Hidden on an empty cart, where it would be a
+          button for removing nothing. */}
+      {lines.length > 0 ? (
+        <Pressable
+          onPress={handleClearCart}
+          hitSlop={6}
+          style={[styles.clearButton, { borderColor: theme.border }]}>
+          <Icon name="trash" size={13} color={theme.danger} />
+          <ThemedText type="smallBold" style={[styles.clearLabel, { color: theme.danger }]}>
+            Vaciar pedido
           </ThemedText>
-          <ThemedText type="small">{lines.length}</ThemedText>
-        </View>
-        <View style={[styles.grandTotalRow, { borderTopColor: theme.border }]}>
+        </Pressable>
+      ) : null}
+
+      {/* Totals sit directly under the cart: the running subtotal belongs to the
+          list of products, not to the payment terms chosen further down. No product count
+          here — the sheet's own header already carries it, right above this. */}
+      <View style={[styles.totalsSection, { borderTopColor: theme.border }]}>
+        <View style={styles.grandTotalRow}>
           <ThemedText type="smallBold" style={styles.grandTotalLabel}>
             Subtotal
           </ThemedText>
@@ -161,51 +233,63 @@ export function OrderPanel({
         </View>
       ) : null}
 
-      {/* Discounts are resolved on the summary screen, which is also where the order
-          is confirmed — nothing here commits the order. */}
+      {/* Discounts and free goods are the pricing service's answer, so this button waits for
+          it rather than navigating straight on: the summary is only worth opening once there
+          is something to summarise. Nothing here commits the order — that is still the
+          summary screen's job. */}
       <Pressable
-        disabled={continueDisabled}
-        onPress={() => onContinue?.(paymentMethod)}
+        disabled={continueDisabled || pricing}
+        onPress={handleApplyIncentives}
         style={[
           styles.continueButton,
-          { backgroundColor: theme.accent, opacity: continueDisabled ? 0.4 : 1 },
+          { backgroundColor: theme.accent, opacity: continueDisabled || pricing ? 0.4 : 1 },
         ]}>
-        <Icon name="cash" size={15} color={theme.onAccent} />
-        <ThemedText type="smallBold" style={[styles.buttonLabel, { color: theme.onAccent }]}>
-          Aplicar descuentos y bonificaciones
-        </ThemedText>
-        <Icon name="chevron.right" size={15} color={theme.onAccent} />
+        {pricing ? (
+          <>
+            <ActivityIndicator size="small" color={theme.onAccent} />
+            <ThemedText type="smallBold" style={[styles.buttonLabel, { color: theme.onAccent }]}>
+              Consultando descuentos…
+            </ThemedText>
+          </>
+        ) : (
+          <>
+            <Icon name="cash" size={15} color={theme.onAccent} />
+            <ThemedText type="smallBold" style={[styles.buttonLabel, { color: theme.onAccent }]}>
+              Aplicar descuentos y bonificaciones
+            </ThemedText>
+            <Icon name="chevron.right" size={15} color={theme.onAccent} />
+          </>
+        )}
       </Pressable>
 
-      {/* Stays enabled offline on purpose — the draft is stored locally and synced
-          later, which is exactly what lets the seller keep taking orders with no
-          signal. Do not disable it alongside the button above. */}
+      {/* Disabled only on an empty cart — there is no draft to save when there is nothing in it.
+          Deliberately NOT disabled offline, unlike the button above: the draft is stored locally
+          and synced later, which is exactly what lets the seller keep taking orders with no
+          signal. The two buttons are unavailable for different reasons, so they must not share a
+          condition. */}
       <Pressable
+        disabled={emptyCart}
         onPress={handleSavePreorder}
-        style={[styles.outlineButton, { borderColor: theme.border, backgroundColor: theme.backgroundElement }]}>
-        <Icon name="tray.and.arrow.down" size={15} color={theme.text} />
-        <ThemedText type="smallBold" style={styles.buttonLabel}>
+        style={[
+          styles.outlineButton,
+          {
+            borderColor: theme.border,
+            backgroundColor: theme.backgroundElement,
+            opacity: emptyCart ? 0.4 : 1,
+          },
+        ]}>
+        <Icon
+          name="tray.and.arrow.down"
+          size={15}
+          color={emptyCart ? theme.textSecondary : theme.text}
+        />
+        <ThemedText
+          type="smallBold"
+          style={[styles.buttonLabel, emptyCart ? { color: theme.textSecondary } : null]}>
           Guardar prepedido
         </ThemedText>
       </Pressable>
     </ScrollView>
-  );
-}
-
-/** One ordered quantity with the price it was agreed at, so the amount stays verifiable. */
-function QtyRow({ qty, unitLabel, unitPrice }: { qty: number; unitLabel: string; unitPrice: number }) {
-  return (
-    <View style={styles.qtyRow}>
-      <ThemedText type="smallBold" style={styles.qtyText}>
-        {qty} {unitLabel}
-      </ThemedText>
-      <ThemedText themeColor="textSecondary" style={styles.qtyText}>
-        × {formatBs(unitPrice)}
-      </ThemedText>
-      <ThemedText themeColor="textSecondary" style={[styles.qtyText, styles.qtyAmount]}>
-        {formatBs(qty * unitPrice)}
-      </ThemedText>
-    </View>
   );
 }
 
@@ -221,11 +305,25 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.five,
     textAlign: 'center',
   },
+  /**
+   * One ordered product, carrying the same accent bar down its left edge that marks a line
+   * item on the confirm screen. The two screens show the same rows, so a seller should not
+   * have to relearn what a product looks like between building the order and closing it.
+   *
+   * The other three sides are coloured individually rather than with `borderColor`: that
+   * shorthand sets all four, so it would paint over the left edge depending on which style
+   * object lands last.
+   */
   line: {
     borderRadius: Radius.sm,
-    borderWidth: 1,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
+    borderTopWidth: 1,
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
+    borderLeftWidth: 3,
+    paddingVertical: 5,
+    paddingRight: 8,
+    // The bar eats two points of the gutter, so the text starts where it did before.
+    paddingLeft: 6,
     gap: 1,
   },
   lineTop: {
@@ -237,15 +335,11 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
   },
-  sizePill: {
-    flexShrink: 0,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: Radius.pill,
-  },
-  sizeText: {
-    fontSize: 9,
-    fontWeight: '700',
+  lineBottom: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 6,
   },
   lineMeta: {
     fontSize: 10,
@@ -255,24 +349,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
-  qtyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
   qtyText: {
     fontSize: 10,
     fontVariant: ['tabular-nums'],
   },
-  qtyAmount: {
-    flex: 1,
-    textAlign: 'right',
-    // Clears the trash button so amounts line up under the subtotal above.
-    marginRight: 26 + 6,
-  },
   iconButton: {
-    width: 26,
-    height: 26,
+    width: 24,
+    height: 24,
     borderRadius: Radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
@@ -321,23 +404,31 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     marginTop: Spacing.two,
   },
+  clearButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+    gap: 5,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+  },
+  clearLabel: {
+    fontSize: 11,
+    lineHeight: 15,
+  },
   totalsSection: {
-    gap: 6,
     paddingTop: Spacing.three,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  totalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
+  // No border of its own any more: it used to be divided from the product count above it,
+  // and now that it is the only row in the section, that rule would sit a few points under
+  // the section's own and read as a double line.
   grandTotalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 2,
-    paddingTop: 6,
-    borderTopWidth: StyleSheet.hairlineWidth,
   },
   grandTotalLabel: {
     fontSize: 14,

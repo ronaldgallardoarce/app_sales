@@ -25,6 +25,7 @@ const GLYPHS = {
   'line.3.horizontal.decrease': 'filter-variant',
   'shippingbox.fill': 'package-variant-closed',
   'cube.box.fill': 'cube-outline',
+  gift: 'gift-outline',
   eye: 'eye-outline',
   'eye.slash': 'eye-off-outline',
   ellipsis: 'dots-horizontal',

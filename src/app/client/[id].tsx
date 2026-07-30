@@ -879,8 +879,11 @@ const styles = StyleSheet.create({
   summaryCard: {
     borderRadius: Radius.lg,
     borderWidth: 1,
-    padding: Spacing.three,
-    gap: Spacing.two,
+    // Horizontal padding stays wide — the card's large corner radius needs it — while the
+    // vertical padding tightens, which is the only axis costing the seller anything.
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+    gap: 6,
   },
   identityRow: {
     flexDirection: 'row',
@@ -913,6 +916,9 @@ const styles = StyleSheet.create({
   },
   metaItemText: {
     fontSize: 11,
+    // The biggest single saving in this card: with no lineHeight these 11pt labels sat in the
+    // `small` type's 20pt box, and there are two rows of them.
+    lineHeight: 15,
   },
   metaItemValue: {
     flexShrink: 1,
@@ -929,7 +935,7 @@ const styles = StyleSheet.create({
   },
   hr: {
     height: 1,
-    marginVertical: 2,
+    marginVertical: 1,
   },
   grid: {
     flexDirection: 'row',
@@ -943,7 +949,7 @@ const styles = StyleSheet.create({
     flexBasis: '30%',
     borderRadius: Radius.sm,
     paddingHorizontal: 6,
-    paddingVertical: 4,
+    paddingVertical: 3,
   },
   statTileLabel: {
     fontSize: 9,
@@ -961,6 +967,9 @@ const styles = StyleSheet.create({
   limitLabel: {
     flexShrink: 0,
     fontSize: 11,
+    // Same trap as `metaItemText`: this row's height was set by an inherited 20pt line box
+    // around 11pt text, not by the 5pt bar beside it.
+    lineHeight: 15,
   },
   progressTrack: {
     // Takes the slack between the label and the figure, so the bar is as wide as the row

@@ -14,6 +14,8 @@ import { DialogProvider } from '@/components/ui/dialog';
 import { CartProvider } from '@/context/cart-context';
 import { ClientVisitProvider } from '@/context/client-visit-context';
 import { ConnectivityProvider } from '@/context/connectivity-context';
+import { OrderIncentivesProvider } from '@/context/order-incentives-context';
+import { OrdersProvider } from '@/context/orders-context';
 import { ThemeSchemeProvider, useThemeSchemeContext } from '@/context/theme-scheme-context';
 import { AndroidImmersiveNavBar, Colors } from '@/constants/theme';
 
@@ -58,6 +60,11 @@ function RootNavigation() {
       {/* Connectivity is ambient — it depends on neither the cart nor the visit. */}
       <ConnectivityProvider>
       <CartProvider>
+        {/* Inside the cart: what the pricing service replied describes the cart's lines, so
+            it can never outlive them. */}
+        <OrderIncentivesProvider>
+        {/* Placed orders outlive any one cart, so this sits outside the incentives reply. */}
+        <OrdersProvider>
         <ClientVisitProvider>
         <DialogProvider>
         <AnimatedSplashOverlay />
@@ -97,6 +104,8 @@ function RootNavigation() {
         ) : null}
         </DialogProvider>
         </ClientVisitProvider>
+        </OrdersProvider>
+        </OrderIncentivesProvider>
       </CartProvider>
       </ConnectivityProvider>
     </ThemeProvider>
