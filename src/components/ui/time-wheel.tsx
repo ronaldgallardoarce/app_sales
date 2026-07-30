@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -16,25 +16,44 @@ const ITEM_HEIGHT = 36;
 const VISIBLE_ROWS = 5;
 const WHEEL_HEIGHT = ITEM_HEIGHT * VISIBLE_ROWS;
 
-/**
- * How many times the value list is laid out end to end. Odd, so one copy is the middle one the
- * wheel is always brought back to; five leaves two whole copies of slack on either side of it,
- * which is more than the fastest flick can cross before the correction below runs.
- */
-const REPEATS = 5;
-
 /** Padding above and below the rows, so the first and last one can still reach the centre line. */
 const EDGE_PADDING = ITEM_HEIGHT * ((VISIBLE_ROWS - 1) / 2);
+
+/**
+ * The share of the remaining distance the wheel covers each frame while catching up.
+ *
+ * A proportion rather than a speed, which is what makes the movement ease out on its own: the
+ * wheel leaves quickly and arrives gently, and a target that moves further away mid-chase is
+ * simply chased harder.
+ *
+ * Closing a proportion each frame means the time barely grows with the distance — at 60fps this
+ * value crosses one row in ~150ms and the whole day in ~270ms — so a nudge and a preset both take
+ * about as long as they look like they should. It is also tuned against the flick: while the other
+ * end is being thrown across the day this wheel stays under one row behind it, close enough to
+ * read as being shoved rather than as a second wheel moving on its own.
+ */
+const CHASE = 0.35;
+
+/** Close enough to stop pretending: below one pixel there is nothing left to animate. */
+const ARRIVED = 1;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
 /**
- * An iOS-style value wheel that scrolls forever in both directions.
+ * An iOS-style value wheel over a short list, with ends it stops at.
  *
- * A plain `ScrollView` with snapping does all the work; the endlessness is an illusion built from
- * a repeated list and one silent correction, described where it happens.
+ * An earlier version of this wheel looped forever, from a list repeated five times with a silent
+ * correction back to the middle copy. That paid for itself when the list was the 48 half hours of
+ * the clock, where crossing it was a journey. It stopped paying when the list became the twenty
+ * half hours of the delivery day: the longest trip a seller can take is one flick, so the looping
+ * bought half a gesture and charged a wheel with no ends — which a range with two of them cannot
+ * use, because there is no honest value on the far side of the last row.
+ *
+ * Nothing in here knows about ranges. Whatever the wheel must not land on is simply not in
+ * `values`, which is why an out-of-range row cannot be scrolled to, dimmed, or bounced off: it was
+ * never handed over.
  */
 export function TimeWheel({
   values,
@@ -48,9 +67,6 @@ export function TimeWheel({
   const theme = useTheme();
   const scrollRef = useRef<ScrollView>(null);
 
-  /** The live scroll offset, kept outside state: the render never needs it, the maths always does. */
-  const offsetRef = useRef(0);
-
   /**
    * The last value this wheel handed to `onChange`.
    *
@@ -59,23 +75,79 @@ export function TimeWheel({
    */
   const lastEmittedRef = useRef(value);
 
-  const rows = useMemo(
-    () => Array.from({ length: values.length * REPEATS }, (_, index) => values[index % values.length]),
-    [values],
-  );
-
-  const middleCopyStart = Math.floor(REPEATS / 2) * values.length;
-
-  const [centredRow, setCentredRow] = useState(() => middleCopyStart + Math.max(values.indexOf(value), 0));
+  const [centredRow, setCentredRow] = useState(() => Math.max(values.indexOf(value), 0));
 
   /** Mirrors `centredRow` for the scroll handlers, which run far more often than renders commit. */
   const centredRowRef = useRef(centredRow);
 
-  const settleOn = (row: number, animated: boolean) => {
+  /** Where the wheel is and where it is headed. Only the chase below writes them both. */
+  const offsetRef = useRef(centredRow * ITEM_HEIGHT);
+  const targetOffsetRef = useRef(centredRow * ITEM_HEIGHT);
+
+  /** The running catch-up, if there is one, and the flag that tells the scroll handler so. */
+  const frameRef = useRef<number | null>(null);
+  const chasingRef = useRef(false);
+
+  const commitCentredRow = () => {
+    const row = clamp(Math.round(offsetRef.current / ITEM_HEIGHT), 0, values.length - 1);
+    if (row === centredRowRef.current) return;
+    centredRowRef.current = row;
+    setCentredRow(row);
+  };
+
+  const stopChase = () => {
+    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+    frameRef.current = null;
+    chasingRef.current = false;
+  };
+
+  /** Put the wheel somewhere with no travel at all: first layout, and nothing else. */
+  const settleOn = (row: number) => {
+    stopChase();
     centredRowRef.current = row;
     setCentredRow(row);
     offsetRef.current = row * ITEM_HEIGHT;
-    scrollRef.current?.scrollTo({ y: row * ITEM_HEIGHT, animated });
+    targetOffsetRef.current = offsetRef.current;
+    scrollRef.current?.scrollTo({ y: offsetRef.current, animated: false });
+  };
+
+  const step = () => {
+    const distance = targetOffsetRef.current - offsetRef.current;
+
+    if (Math.abs(distance) < ARRIVED) {
+      offsetRef.current = targetOffsetRef.current;
+      scrollRef.current?.scrollTo({ y: offsetRef.current, animated: false });
+      commitCentredRow();
+      stopChase();
+      return;
+    }
+
+    offsetRef.current += distance * CHASE;
+    scrollRef.current?.scrollTo({ y: offsetRef.current, animated: false });
+    commitCentredRow();
+    frameRef.current = requestAnimationFrame(step);
+  };
+
+  /**
+   * The pushed end travelling to where it was shoved, instead of appearing there.
+   *
+   * One chase, re-aimed — and that is the whole reason this is hand-driven rather than a
+   * `scrollTo({ animated: true })`. While the seller flicks one end through the other, this wheel
+   * is pushed a row at a time, several times a second. Each animated `scrollTo` would cancel the
+   * one still in flight, so the wheel would restart its easing on every push and crawl behind the
+   * finger, arriving long after the gesture died. Here there is a single loop that reads the
+   * target fresh on every frame: a push that lands mid-flight moves the destination, not the
+   * animation, so the wheel just keeps rolling and only settles once it is no longer being shoved.
+   *
+   * That lag is not a defect to tune away either. The wheel trailing the one under the finger by a
+   * fraction of a second is what a push looks like — the far end is not choosing an hour, it is
+   * being pushed out of the way, and it should read as the thing being moved.
+   */
+  const chaseTo = (row: number) => {
+    targetOffsetRef.current = row * ITEM_HEIGHT;
+    if (frameRef.current !== null) return;
+    chasingRef.current = true;
+    frameRef.current = requestAnimationFrame(step);
   };
 
   /**
@@ -86,92 +158,61 @@ export function TimeWheel({
   const handleContentSizeChange = () => {
     if (mountedRef.current) return;
     mountedRef.current = true;
-    settleOn(centredRowRef.current, false);
+    settleOn(centredRowRef.current);
   };
 
+  /**
+   * The value under the centre line, reported live rather than on release.
+   *
+   * The other end of the range is pushed by this one, so waiting for the gesture to finish would
+   * mean the seller drags "Desde" through "Hasta" and only finds out where "Hasta" ended up once
+   * they let go. Emitting per row keeps the readback above the wheels true the whole way.
+   *
+   * Silent while the chase is running, because the rows crossing the centre line then are ones
+   * this wheel is being carried past, not ones the seller picked. Emitting them would send the
+   * far end's own travel back to the parent as a choice, and the two wheels would push each other
+   * across the day.
+   */
   const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const offset = event.nativeEvent.contentOffset.y;
-    offsetRef.current = offset;
+    if (chasingRef.current) return;
 
-    const row = clamp(Math.round(offset / ITEM_HEIGHT), 0, rows.length - 1);
-    if (row === centredRowRef.current) return;
-    centredRowRef.current = row;
-    setCentredRow(row);
+    offsetRef.current = event.nativeEvent.contentOffset.y;
+    commitCentredRow();
 
-    // Guarded on the value and not on the row, because crossing a copy boundary changes the row
-    // while the value under the centre line stays the same.
-    const next = rows[row];
+    const next = values[centredRowRef.current];
     if (next === lastEmittedRef.current) return;
     lastEmittedRef.current = next;
     onChange(next);
   };
 
-  /**
-   * The whole trick, and the reason the wheel never runs out of list.
-   *
-   * When the scroll comes to rest inside the first or last copy, the offset is moved by a whole
-   * number of copies (`values.length * ITEM_HEIGHT` each) so the same value sits under the centre
-   * line in the middle copy. Nothing is animated, no value changes, and the rows either side are
-   * identical, so there is nothing on screen to tell the seller apart from before — they are just
-   * back in the middle with a full copy of runway in both directions again.
-   *
-   * On momentum end and nowhere else. Correcting mid-gesture rewrites the offset the finger is
-   * still driving, which snaps the content out from under the touch and cancels the deceleration
-   * the wheel is entirely made of.
-   */
-  const handleMomentumEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const offset = event.nativeEvent.contentOffset.y;
-    offsetRef.current = offset;
-
-    const row = clamp(Math.round(offset / ITEM_HEIGHT), 0, rows.length - 1);
-    const copy = Math.floor(row / values.length);
-    if (copy !== 0 && copy !== REPEATS - 1) return;
-
-    settleOn(middleCopyStart + (row % values.length), false);
+  /** A hand on the wheel outranks a push: the chase gives up rather than fight the gesture. */
+  const handleScrollBeginDrag = () => {
+    stopChase();
   };
 
-  /**
-   * The row holding `index` in whichever copy is closest to where the wheel already is, so an
-   * outside change travels the shortest distance instead of always hauling back to the middle
-   * copy — a jump of two whole copies that reads as the list teleporting.
-   *
-   * The outermost copies are left out on purpose: landing in one leaves no runway on that side,
-   * and the correction above only runs after a gesture, not after a programmatic scroll.
-   */
-  const nearestRow = (index: number) => {
-    const current = offsetRef.current / ITEM_HEIGHT;
-    let best = values.length + index;
-    for (let copy = 1; copy < REPEATS - 1; copy += 1) {
-      const row = copy * values.length + index;
-      if (Math.abs(row - current) < Math.abs(best - current)) best = row;
-    }
-    return best;
-  };
-
-  /**
-   * Outside changes land without animation, and that is not a shortcut.
-   *
-   * This wheel emits on every row that crosses the centre line, so while one end is being flicked
-   * the other end is handed a new value roughly every frame. An animated `scrollTo` takes ~300ms,
-   * so each of those would cancel the one still in flight: the following wheel would crawl behind
-   * the finger in tiny increments and only catch up once the flick died. Landing instantly instead
-   * makes the two ends move in lockstep, which is also the truthful picture of what the coupling
-   * does — the span is fixed, so the other end is not deciding anything, it is being carried.
-   *
-   * The one case where this scroll lands on a wheel that is still under the finger is a clamp at
-   * either edge of the day, and there fighting the gesture is the point: it is the day running out.
-   */
   useEffect(() => {
     if (value === lastEmittedRef.current) return;
 
     const index = values.indexOf(value);
     if (index < 0) return;
     lastEmittedRef.current = value;
-    settleOn(nearestRow(index), false);
-    // `values` is a module constant in every call site, and re-running on the derived helpers
-    // would fire this on renders where nothing about the selection moved.
+
+    // Before the rows are measured there is nothing to travel across, and the wheel would be
+    // animating from a position it has not taken up yet.
+    if (mountedRef.current) chaseTo(index);
+    else settleOn(index);
+    // Both helpers are rebuilt every render and touch nothing but refs, so listing them would only
+    // re-run this on renders where the selection did not move. The guard above already makes that
+    // a no-op, but the effect is meant to fire on a new value and nothing else.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, values]);
+
+  /** A chase outliving its wheel would scroll a ref that is no longer on screen. */
+  useEffect(() => {
+    return () => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+    };
+  }, []);
 
   return (
     <View style={styles.wheel}>
@@ -195,13 +236,13 @@ export function TimeWheel({
         // scroll container without this.
         nestedScrollEnabled
         onScroll={handleScroll}
-        onMomentumScrollEnd={handleMomentumEnd}
+        onScrollBeginDrag={handleScrollBeginDrag}
         onContentSizeChange={handleContentSizeChange}
         contentContainerStyle={styles.rows}>
-        {rows.map((row, index) => {
+        {values.map((row, index) => {
           const distance = Math.abs(index - centredRow);
           return (
-            <View key={`${row}-${index}`} style={styles.row}>
+            <View key={row} style={styles.row}>
               {/* Stepped down by distance rather than animated: the rows move, the fade belongs to
                   the position they pass through, so it can be plain computed style. */}
               <ThemedText

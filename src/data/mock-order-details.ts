@@ -67,9 +67,9 @@ export function orderDetailsFor(client: MapClient): OrderClientDetails {
  * A window the client is able to receive in.
  *
  * The presets below are a shortcut, not the whole vocabulary: the picker also spins each end to
- * any time of day, because a client who receives from 09:30 to 11:00 exists and a fixed list
- * cannot hold every such pair. What keeps a range valid is the picker itself — moving either end
- * carries the other along — rather than the old absence of choice.
+ * any half hour of the delivery day, because a client who receives from 09:30 to 11:00 exists and
+ * a fixed list cannot hold every such pair. What keeps a range valid is the picker itself — either
+ * end pushes the other ahead of it rather than crossing it — and not the old absence of choice.
  *
  * `quick` marks the handful worth a single tap: the wheels cover every other combination, so the
  * chip row only carries the ones a seller reaches for by name several times a day.
@@ -105,21 +105,38 @@ export function findDeliveryWindow(from: string, to: string): DeliveryWindow | u
  */
 export const DELIVERY_WHEEL_STEP_MINUTES = 30;
 
+/** The hours deliveries actually run between, and the two ends the wheels cannot pass. */
+export const DELIVERY_OPENING_MINUTES = 8 * 60;
+export const DELIVERY_CLOSING_MINUTES = 18 * 60;
+
 /**
- * Every time the delivery wheels can rest on: `00:00` through `23:30`, the whole clock.
+ * Every time the delivery wheels can rest on: `08:00` through `18:00`, both ends included.
  *
- * The full day rather than the business-hours shortlist this replaced. The wheels loop, so length
- * stops being a cost — a flick crosses hours and the list has no ends to run into — while a
- * shortlist could not express the clients who only receive before opening or after closing, which
- * is a real answer sellers were rounding to the nearest allowed hour.
+ * The delivery day and not the clock. Nothing leaves the warehouse before eight or after six, so
+ * the hours outside that were never answers a seller could give — offering them only invited a
+ * window the round could not serve. Both ends are inclusive because `18:00` has to be reachable
+ * as a closing hour, which is why the list is one row longer than the spans it divides.
  */
 export const DELIVERY_DAY_HOURS: readonly string[] = Array.from(
-  { length: (24 * 60) / DELIVERY_WHEEL_STEP_MINUTES },
+  { length: (DELIVERY_CLOSING_MINUTES - DELIVERY_OPENING_MINUTES) / DELIVERY_WHEEL_STEP_MINUTES + 1 },
   (_, index) => {
-    const minutes = index * DELIVERY_WHEEL_STEP_MINUTES;
+    const minutes = DELIVERY_OPENING_MINUTES + index * DELIVERY_WHEEL_STEP_MINUTES;
     return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
   },
 );
+
+/**
+ * The rows each end of the range may rest on, and the whole reason an inverted window cannot be
+ * built here.
+ *
+ * `18:00` can never be an opening hour — no delivery day is left after it to receive in — and
+ * `08:00` can never be a closing one. Leaving each of those off the wheel that cannot use it makes
+ * the boundary a property of the lists instead of a rule the picker has to keep checking: the last
+ * hour "Desde" can reach still leaves a row for "Hasta" above it, and the first hour "Hasta" can
+ * reach still leaves one for "Desde" below it. There is no end of the day left to special-case.
+ */
+export const DELIVERY_FROM_HOURS: readonly string[] = DELIVERY_DAY_HOURS.slice(0, -1);
+export const DELIVERY_TO_HOURS: readonly string[] = DELIVERY_DAY_HOURS.slice(1);
 
 /** An `HH:MM` hour as minutes since midnight, so two of them can be compared or subtracted. */
 export function minutesOfTime(time: string): number {

@@ -8,6 +8,8 @@ import { TimeWheel } from '@/components/ui/time-wheel';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
 import {
   DELIVERY_DAY_HOURS,
+  DELIVERY_FROM_HOURS,
+  DELIVERY_TO_HOURS,
   DELIVERY_WHEEL_STEP_MINUTES,
   DELIVERY_WINDOWS,
   deliveryWindowLabelFor,
@@ -21,55 +23,61 @@ import { useTheme } from '@/hooks/use-theme';
 const QUICK_WINDOWS = DELIVERY_WINDOWS.filter((window) => window.quick);
 
 const FIRST_MINUTES = minutesOfTime(DELIVERY_DAY_HOURS[0]);
-const LAST_MINUTES = minutesOfTime(DELIVERY_DAY_HOURS[DELIVERY_DAY_HOURS.length - 1]);
+/** The last hour the "Desde" wheel carries — one step short of closing, by construction. */
+const LAST_FROM_MINUTES = minutesOfTime(DELIVERY_FROM_HOURS[DELIVERY_FROM_HOURS.length - 1]);
 
 /** The range being built. Both ends are always set, which is what makes it always applicable. */
 type DraftRange = { from: string; to: string };
 
-/** The wheel row nearest a minute-of-day, clamped to the day the wheels actually cover. */
+/** The hour nearest a minute-of-day, on the full grid and clamped to the delivery day. */
 function hourAt(minutes: number): string {
   const index = Math.round((minutes - FIRST_MINUTES) / DELIVERY_WHEEL_STEP_MINUTES);
   return DELIVERY_DAY_HOURS[Math.min(Math.max(index, 0), DELIVERY_DAY_HOURS.length - 1)];
 }
 
-/** The current length of the range, never below one wheel step. */
-function spanOf(range: DraftRange): number {
-  return Math.max(minutesOfTime(range.to) - minutesOfTime(range.from), DELIVERY_WHEEL_STEP_MINUTES);
+/**
+ * The rule that keeps the range valid, and it is a push rather than a limit.
+ *
+ * Two wheels spin independently and neither one knows about the other, so nothing stops the seller
+ * from dragging "Desde" through "Hasta". Rather than refuse the gesture there, the end being
+ * dragged goes wherever it is taken and shoves the other one out of the way by a single step.
+ * Nothing is ever rejected, and the only moment the far end moves at all is the moment it would
+ * otherwise have been crossed.
+ *
+ * Two alternatives were tried and are worth naming, because both are worse for the same reason.
+ * Carrying the far end along to preserve the *length* of the window means a seller nudging the
+ * opening half an hour later silently gets a closing half an hour later too — a change they did
+ * not ask for and would not read back to the client. Stopping the dragged end one step short of
+ * the other keeps the hours honest but refuses the gesture, so rebuilding 08:00–10:00 into
+ * 14:00–16:00 forces the ends to be moved in the right order. The push has neither cost: the far
+ * end holds still until it is actually in the way, and no drag is ever turned down.
+ */
+function withFrom(range: DraftRange, next: string): DraftRange {
+  const floor = minutesOfTime(next) + DELIVERY_WHEEL_STEP_MINUTES;
+  return { from: next, to: minutesOfTime(range.to) < floor ? hourAt(floor) : range.to };
+}
+
+/** The mirror of `withFrom`: the closing end leads and shoves the opening end down before it. */
+function withTo(range: DraftRange, next: string): DraftRange {
+  const ceiling = minutesOfTime(next) - DELIVERY_WHEEL_STEP_MINUTES;
+  return { from: minutesOfTime(range.from) > ceiling ? hourAt(ceiling) : range.from, to: next };
 }
 
 /**
- * The coupling rule, and the only reason an inverted range cannot be produced here.
+ * The hours the sheet opens on, dragged onto the rows the wheels actually carry.
  *
- * Two wheels spin independently and neither one knows about the other, so nothing stops the
- * seller from parking "Hasta" before "Desde". Rather than let that happen and then refuse it,
- * moving one end carries the other along at the same distance — the way the start and end
- * pickers of the iOS calendar behave. Validity becomes a property of the control instead of a
- * rule applied to its output, which is why there is no error copy, no disabled end and no
- * rejected gesture anywhere in this sheet: there is no invalid state left to report.
+ * An order saved before the day was narrowed to 08:00–18:00 — or off the half-hour grid entirely —
+ * would otherwise hand a wheel a value that is not one of its rows: the wheel would find nothing to
+ * scroll to and sit on its first hour while the readback above it claimed something else. Rounding
+ * on the way in means what the sheet shows is always what applying it would save.
  *
- * At the ends of the day the range cannot keep sliding, so it stops and the moved end gives way
- * instead — one step of separation is always kept, because a zero-length window is not an answer
- * anyone means to give.
+ * The opening hour is capped before anything else, because `18:00` is the one hour the "Desde"
+ * wheel does not carry; the push then lifts the closing hour above it, which also covers a stored
+ * range that was inverted or empty to begin with.
  */
-function coupleFrom(range: DraftRange, next: string): DraftRange {
-  const span = spanOf(range);
-  const from = minutesOfTime(next);
-
-  if (from + span > LAST_MINUTES) {
-    return { from: hourAt(LAST_MINUTES - span), to: hourAt(LAST_MINUTES) };
-  }
-  return { from: next, to: hourAt(from + span) };
-}
-
-/** The mirror of `coupleFrom`: the closing end leads and the opening end follows it. */
-function coupleTo(range: DraftRange, next: string): DraftRange {
-  const span = spanOf(range);
-  const to = minutesOfTime(next);
-
-  if (to - span < FIRST_MINUTES) {
-    return { from: hourAt(FIRST_MINUTES), to: hourAt(FIRST_MINUTES + span) };
-  }
-  return { from: hourAt(to - span), to: next };
+function seedRange(from: string, to: string): DraftRange {
+  const opening = hourAt(Math.min(minutesOfTime(from), LAST_FROM_MINUTES));
+  return withFrom({ from: opening, to: hourAt(minutesOfTime(to)) }, opening);
 }
 
 /**
@@ -78,16 +86,17 @@ function coupleTo(range: DraftRange, next: string): DraftRange {
  *
  * This replaced a grid of hours the seller tapped twice to build a range. The grid worked, but it
  * asked for a gesture nobody has anywhere else on their phone, it had to explain itself in a line
- * of copy under the chips, and it could only ever show the hours it had room for — a client who
- * receives at 06:30 or at 21:00 was out of its vocabulary. Wheels are the gesture every seller
- * already knows from every other time picker they own, they reach the whole 24 hours without
- * putting 48 options on screen, and because each wheel carries a single value there is nothing
- * half-built to explain: the range is complete from the moment the sheet opens.
+ * of copy under the chips, and it could only ever show the hours it had room for — 09:30 to 11:00
+ * was out of its vocabulary. Wheels are the gesture every seller already knows from every other
+ * time picker they own, they reach every half hour of the delivery day, and because each wheel
+ * carries a single value there is nothing half-built to explain: the range is complete from the
+ * moment the sheet opens.
  *
  * What the grid bought with its two-tap order — an end that could not land before its start — the
- * coupling above buys structurally instead: the ends move together, so the seller drags whichever
- * one they are thinking about and the range follows without ever being wrong. The chips remain
- * for the four windows worth naming, and `Aplicar horario` remains the single commit point.
+ * push above buys structurally instead: the seller drags whichever end they are thinking about,
+ * the other gets shoved along only if it is in the way, and the two lists have no rows on them
+ * that could produce an inverted range. The chips remain for the four windows worth naming, and
+ * `Aplicar horario` remains the single commit point.
  */
 export function DeliveryWindowSheet({
   visible,
@@ -104,17 +113,16 @@ export function DeliveryWindowSheet({
 }) {
   const theme = useTheme();
 
-  // One piece of state rather than two: every change reads both ends to preserve the span, and
-  // splitting them would mean computing the new span from a value the other setter has not
-  // committed yet.
-  const [range, setRange] = useState<DraftRange>({ from: selectedFrom, to: selectedTo });
+  // One piece of state rather than two: each end is clamped against the other, and splitting them
+  // would mean clamping against a value the other setter has not committed yet.
+  const [range, setRange] = useState<DraftRange>(() => seedRange(selectedFrom, selectedTo));
 
   // Re-seeded every time it opens, so closing without applying discards the draft: the sheet
   // stays mounted between openings, and without this it would come back holding hours the seller
   // had already walked away from.
   useEffect(() => {
     if (!visible) return;
-    setRange({ from: selectedFrom, to: selectedTo });
+    setRange(seedRange(selectedFrom, selectedTo));
   }, [visible, selectedFrom, selectedTo]);
 
   const apply = () => {
@@ -193,7 +201,7 @@ export function DeliveryWindowSheet({
         </View>
 
         <ThemedText themeColor="textSecondary" style={styles.caption}>
-          O deslizá las ruedas: cubren las 24 horas del día.
+          O deslizá las ruedas: de 08:00 a 18:00, cada media hora.
         </ThemedText>
 
         <View style={styles.wheels}>
@@ -201,10 +209,12 @@ export function DeliveryWindowSheet({
             <ThemedText themeColor="textSecondary" style={styles.fieldCaption}>
               Desde
             </ThemedText>
+            {/* Runs to 17:30 and no further, because there is no window that opens at closing
+                time. That missing row is what lets the push above never run out of day. */}
             <TimeWheel
-              values={DELIVERY_DAY_HOURS}
+              values={DELIVERY_FROM_HOURS}
               value={range.from}
-              onChange={(next) => setRange((current) => coupleFrom(current, next))}
+              onChange={(next) => setRange((current) => withFrom(current, next))}
             />
           </View>
 
@@ -212,10 +222,11 @@ export function DeliveryWindowSheet({
             <ThemedText themeColor="textSecondary" style={styles.fieldCaption}>
               Hasta
             </ThemedText>
+            {/* Starts at 08:30, the mirror of the same idea: nothing closes at opening time. */}
             <TimeWheel
-              values={DELIVERY_DAY_HOURS}
+              values={DELIVERY_TO_HOURS}
               value={range.to}
-              onChange={(next) => setRange((current) => coupleTo(current, next))}
+              onChange={(next) => setRange((current) => withTo(current, next))}
             />
           </View>
         </View>
