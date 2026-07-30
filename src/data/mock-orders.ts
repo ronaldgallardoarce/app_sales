@@ -37,8 +37,12 @@ export const ORDER_STATUS_META: Record<
  * `CartLine` already is.
  */
 export type PlacedOrder = {
-  /** Human order number, the thing a seller reads out when the office calls. */
-  id: string;
+  /**
+   * The order number, the thing a seller reads out when the office calls. An integer, the way the
+   * back office issues it — the old `P-004518` was a label wearing an id, and formatting belongs
+   * to whoever prints it, not to the record.
+   */
+  id: number;
   clientId: string;
   clientCode: string;
   clientName: string;
@@ -61,6 +65,12 @@ export type PlacedOrder = {
   status: OrderStatus;
   /** False while the order is still only on this phone. */
   synced: boolean;
+  /**
+   * Whether the order has already been amended. An order gets one edit and no more, so this is
+   * the second half of the edit gate: `createdAtMs` closes the window with time, this one closes
+   * it with use — and unlike the clock it never reopens.
+   */
+  edited: boolean;
   lines: CartLine[];
   /** The free goods granted, one entry per line that earned any. */
   bonifications: LineBonification[];
@@ -72,32 +82,81 @@ export type PlacedOrder = {
   bonificationUnits: number;
 };
 
-/** How long after it was taken an order may still be edited. */
-export const EDIT_WINDOW_HOURS = 2;
-
-const EDIT_WINDOW_MS = EDIT_WINDOW_HOURS * 60 * 60 * 1000;
-
 /**
- * Whether the order is still inside its edit window.
+ * The order number written the way it is said out loud: "N° 4518".
  *
- * Only the age is checked, which is the rule as specified. Note that this therefore allows
- * editing a cancelled or already-delivered order that happens to be recent — if those should be
- * frozen regardless of age, that is a second rule and it belongs here.
+ * One function so every screen prints the id the same way. A bare integer on its own in a header
+ * or a dialog title reads like a quantity — the "N°" is what makes it a number *of* something,
+ * and it is the same abbreviation the search box already asks for.
  */
-export function canEditOrder(order: PlacedOrder, now: number = Date.now()): boolean {
-  return now - order.createdAtMs < EDIT_WINDOW_MS;
+export function orderNumberLabel(id: number): string {
+  return `N° ${id}`;
 }
 
 /**
- * How much of the edit window is left, spoken the way it is read out: "1 h 20 min", "45 min".
+ * How long after it was taken an order may still be changed — edited or deleted alike.
+ *
+ * One window and not two: both actions rewrite what the office was already told, so the moment
+ * the order stops being the seller's to amend is the same moment it stops being theirs to
+ * withdraw. A delete that outlived the edit would be the wider hole of the two.
+ */
+export const CHANGE_WINDOW_HOURS = 2;
+
+const CHANGE_WINDOW_MS = CHANGE_WINDOW_HOURS * 60 * 60 * 1000;
+
+/**
+ * Whether the order may still be edited: young enough, and never edited before.
+ *
+ * Two rules, and the one-edit half is the stricter of them. It is checked first because it is
+ * permanent — an order that has been amended stays closed for good, so the remaining minutes on
+ * its clock stop meaning anything.
+ *
+ * Status is still not consulted, which means a cancelled or already-delivered order that happens
+ * to be fresh and untouched is editable. If those should be frozen too, that is a third rule and
+ * it belongs here.
+ */
+export function canEditOrder(order: PlacedOrder, now: number = Date.now()): boolean {
+  return !order.edited && now - order.createdAtMs < CHANGE_WINDOW_MS;
+}
+
+/**
+ * Whether the order may still be deleted: the same two hours, and only those.
+ *
+ * The one-edit half deliberately does not apply here. It exists so an order cannot be reshaped
+ * again and again after the office has seen it; an order that used its edit has not used up any
+ * right to be withdrawn, and freezing it would leave a seller who amended a mistaken order at
+ * 9:05 unable to cancel it at 9:10.
+ */
+export function canDeleteOrder(order: PlacedOrder, now: number = Date.now()): boolean {
+  return now - order.createdAtMs < CHANGE_WINDOW_MS;
+}
+
+/**
+ * Which rule closed the edit, or null while it is still open.
+ *
+ * The two closures are not the same news to a seller — one is "you already did this", the other
+ * "you waited too long" — and only one of them is worth arguing with the office about. The screens
+ * ask instead of re-deriving it, so the wording stays a screen's business and the rule stays this
+ * file's.
+ */
+export function editBlockedReason(
+  order: PlacedOrder,
+  now: number = Date.now(),
+): 'edited' | 'expired' | null {
+  if (order.edited) return 'edited';
+  return now - order.createdAtMs < CHANGE_WINDOW_MS ? null : 'expired';
+}
+
+/**
+ * How much of the change window is left, spoken the way it is read out: "1 h 20 min", "45 min".
  *
  * Minutes and not whole hours, and that is not cosmetic. This used to floor the remainder to
  * hours, which was harmless while the window was two days wide and became a lie the moment it
  * became two: an order with fifty minutes left reported "0 horas más" — the window open, the
  * button live, and the sentence under it saying the time was gone.
  */
-export function editTimeLeftLabel(order: PlacedOrder, now: number = Date.now()): string {
-  const minutes = Math.max(Math.floor((order.createdAtMs + EDIT_WINDOW_MS - now) / 60_000), 0);
+export function changeTimeLeftLabel(order: PlacedOrder, now: number = Date.now()): string {
+  const minutes = Math.max(Math.floor((order.createdAtMs + CHANGE_WINDOW_MS - now) / 60_000), 0);
   if (minutes < 60) return `${minutes} min`;
 
   const hours = Math.floor(minutes / 60);
@@ -186,14 +245,18 @@ function order(
     | 'clientName'
     | 'createdAt'
     | 'bonificationUnits'
-  > & { discountPct: number },
+    | 'edited'
+  > & { discountPct: number; edited?: boolean },
 ): PlacedOrder {
-  const { discountPct, ...rest } = base;
+  // `edited` defaults to false so only a fixture that means to be spent says so: untouched is
+  // what an order is when it is taken, and ten fixtures repeating that adds nothing.
+  const { discountPct, edited = false, ...rest } = base;
   const client = mapClients.find((candidate: MapClient) => candidate.id === rest.clientId);
   const subtotal = rest.lines.reduce((sum, line) => sum + lineAmount(line), 0);
   const discount = Number(((subtotal * discountPct) / 100).toFixed(2));
   return {
     ...rest,
+    edited,
     // Derived, not accepted as input: the day and the instant are the same fact, and the free
     // unit count is just its own list added up.
     createdAt: toDateKey(new Date(rest.createdAtMs)),
@@ -217,7 +280,7 @@ function order(
  */
 export const mockOrders: PlacedOrder[] = [
   order({
-    id: 'P-004518',
+    id: 4518,
     clientId: mapClients[0]?.id ?? 'c1',
     createdAtMs: minutesAgo(35),
     deliveryDate: futureKey(1),
@@ -237,9 +300,13 @@ export const mockOrders: PlacedOrder[] = [
     bonifications: [gift(10020, 2), gift(20101, 2)],
   }),
   order({
-    id: 'P-004517',
+    id: 4517,
     clientId: mapClients[1]?.id ?? 'c2',
     createdAtMs: minutesAgo(105),
+    // Inside its window and already spent — the only way to see an order refused for having been
+    // edited rather than for being old, since the two fresh fixtures are the only editable ones
+    // and the other is left open on purpose.
+    edited: true,
     deliveryDate: futureKey(2),
     deliveryFrom: '14:00',
     deliveryTo: '18:00',
@@ -256,7 +323,7 @@ export const mockOrders: PlacedOrder[] = [
     bonifications: [],
   }),
   order({
-    id: 'P-004515',
+    id: 4515,
     clientId: mapClients[2]?.id ?? 'c3',
     createdAtMs: hoursAgo(30),
     deliveryDate: dayKey(0),
@@ -272,7 +339,7 @@ export const mockOrders: PlacedOrder[] = [
     bonifications: [gift(10030, 6)],
   }),
   order({
-    id: 'P-004509',
+    id: 4509,
     clientId: mapClients[3]?.id ?? 'c4',
     createdAtMs: hoursAgo(74),
     deliveryDate: dayKey(2),
@@ -292,7 +359,7 @@ export const mockOrders: PlacedOrder[] = [
     bonifications: [gift(10050, 6), gift(10080, 6)],
   }),
   order({
-    id: 'P-004503',
+    id: 4503,
     clientId: mapClients[4]?.id ?? 'c5',
     createdAtMs: hoursAgo(145),
     deliveryDate: dayKey(5),
@@ -308,7 +375,7 @@ export const mockOrders: PlacedOrder[] = [
     bonifications: [],
   }),
   order({
-    id: 'P-004498',
+    id: 4498,
     clientId: mapClients[0]?.id ?? 'c1',
     createdAtMs: hoursAgo(220),
     deliveryDate: dayKey(8),
@@ -324,7 +391,7 @@ export const mockOrders: PlacedOrder[] = [
     bonifications: [gift(10020, 2)],
   }),
   order({
-    id: 'P-004491',
+    id: 4491,
     clientId: mapClients[5]?.id ?? 'c6',
     createdAtMs: hoursAgo(340),
     deliveryDate: dayKey(13),
@@ -343,7 +410,7 @@ export const mockOrders: PlacedOrder[] = [
     bonifications: [],
   }),
   order({
-    id: 'P-004476',
+    id: 4476,
     clientId: mapClients[2]?.id ?? 'c3',
     createdAtMs: hoursAgo(580),
     deliveryDate: dayKey(23),
@@ -362,7 +429,7 @@ export const mockOrders: PlacedOrder[] = [
     bonifications: [gift(10070, 10)],
   }),
   order({
-    id: 'P-004455',
+    id: 4455,
     clientId: mapClients[1]?.id ?? 'c2',
     createdAtMs: hoursAgo(985),
     deliveryDate: dayKey(40),

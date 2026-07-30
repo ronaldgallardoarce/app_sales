@@ -2,6 +2,7 @@ import { useRouter } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ActiveVisitBar } from '@/components/client/active-visit-bar';
 import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
 import { CardShadow, Radius, Spacing } from '@/constants/theme';
@@ -54,6 +55,8 @@ export default function HomeScreen() {
           </Pressable>
         </View>
       </SafeAreaView>
+
+      <ActiveVisitBar />
 
       <ScrollView
         showsVerticalScrollIndicator={false}

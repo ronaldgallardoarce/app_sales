@@ -9,6 +9,7 @@ import { ClientList } from '@/components/map/client-list';
 import { LeafletMap } from '@/components/map/leaflet-map';
 import { MapLegend } from '@/components/map/map-legend';
 import { RouteSheet } from '@/components/map/route-sheet';
+import { StatusChip } from '@/components/map/status-chip';
 import { ThemedText } from '@/components/themed-text';
 import { Icon, type IconName } from '@/components/ui/icon';
 import { OfflineBadge } from '@/components/ui/offline-badge';
@@ -40,7 +41,7 @@ export default function MapScreen() {
   const theme = useTheme();
   const router = useRouter();
   const insets = useContentInsets();
-  const { clients } = useClientVisits();
+  const { clients, openVisits } = useClientVisits();
 
   const todayClients = useMemo(() => clients.filter((c) => c.visitToday), [clients]);
   const boundsPolygon = useMemo(() => convexHull(routeBlocks.flat()), []);
@@ -90,6 +91,16 @@ export default function MapScreen() {
     baseClients.forEach((c) => (counts[c.channel] += 1));
     return counts;
   }, [baseClients]);
+
+  const statusCounts = useMemo(() => {
+    const counts = {} as Record<VisitStatus, number>;
+    STATUS_ORDER.forEach((status) => (counts[status] = 0));
+    baseClients.forEach((c) => (counts[c.status] += 1));
+    return counts;
+  }, [baseClients]);
+
+  /** Which clients are being stood in right now — what the pulsing marks announce. */
+  const liveClientIds = useMemo(() => openVisits.map((v) => v.clientId), [openVisits]);
 
   const displayedClients = useMemo(
     () =>
@@ -164,7 +175,10 @@ export default function MapScreen() {
         <View style={styles.headerRow}>
           <Pressable
             hitSlop={8}
-            onPress={() => router.replace('/' as Href)}
+            // A pop, not a replace. Replacing swapped this screen for the home screen instead of
+            // leaving, which on the way in from "Clientes" left a home screen stacked on top of a
+            // client list — and back from there went to the list it had just covered.
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/' as Href))}
             style={[styles.roundButton, { backgroundColor: theme.backgroundElement }]}>
             <Icon name="chevron.left" size={18} color={theme.text} />
           </Pressable>
@@ -253,6 +267,10 @@ export default function MapScreen() {
                     active={statusFilter === status}
                     color={theme[meta.color]}
                     soft={theme[meta.soft]}
+                    count={statusCounts[status]}
+                    // Only "iniciado" carries the pulse: it is the status that means the seller
+                    // is inside someone, and a chip that beat for every state would say nothing.
+                    live={status === 'iniciado' && liveClientIds.length > 0}
                     onPress={() => setStatusFilter(status)}
                   />
                 );
@@ -283,6 +301,7 @@ export default function MapScreen() {
                 routeLegs={routeResult?.legs ?? null}
                 directionsLegs={directionsLegs}
                 pickMode={pickingStart}
+                liveClientIds={liveClientIds}
                 onSelect={(id) => {
                   const client = clients.find((c) => c.id === id);
                   if (client) setSelectedClient(client);
@@ -448,40 +467,6 @@ function SegmentButton({
   );
 }
 
-function StatusChip({
-  label,
-  active,
-  color,
-  soft,
-  onPress,
-}: {
-  label: string;
-  active: boolean;
-  color: string;
-  soft: string;
-  onPress: () => void;
-}) {
-  const theme = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[
-        styles.statusChip,
-        {
-          backgroundColor: active ? soft : theme.backgroundElement,
-          borderColor: active ? color : theme.border,
-        },
-      ]}>
-      <View style={[styles.statusChipDot, { backgroundColor: color }]} />
-      <ThemedText
-        type="smallBold"
-        style={[styles.statusChipText, { color: active ? color : theme.textSecondary }]}>
-        {label}
-      </ThemedText>
-    </Pressable>
-  );
-}
-
 function LayerToggle({
   icon,
   label,
@@ -600,23 +585,6 @@ const styles = StyleSheet.create({
   channelButtonLabel: {
     fontSize: 11,
     maxWidth: 90,
-  },
-  statusChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: ChipPadding.horizontal,
-    paddingVertical: ChipPadding.vertical,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
-  },
-  statusChipDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  statusChipText: {
-    fontSize: 11,
   },
   mapWrapper: {
     flex: 1,

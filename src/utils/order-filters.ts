@@ -33,8 +33,13 @@ export type OrderFilters = {
   query: string;
 };
 
+/**
+ * Opens on today. The screen is reached most often right after placing an order or to check what
+ * has gone out so far in the day, so the list starts on the day being worked — the wider windows
+ * are one tap away when the question turns out to be a longer one.
+ */
 export const DEFAULT_ORDER_FILTERS: OrderFilters = {
-  period: '30',
+  period: 'hoy',
   from: null,
   to: null,
   status: null,
@@ -87,7 +92,9 @@ export function filterOrders(orders: PlacedOrder[], filters: OrderFilters): Plac
       }
       return true;
     })
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+    // Same day, higher number first — the tiebreaker is arithmetic now that the id is an integer,
+    // which is also the only sort that stays right when the numbering crosses a digit boundary.
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id);
 }
 
 /**

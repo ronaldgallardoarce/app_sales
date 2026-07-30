@@ -4,13 +4,26 @@ import { mockOrders, type PlacedOrder } from '@/data/mock-orders';
 
 interface OrdersContextValue {
   orders: PlacedOrder[];
+  /** Store a newly confirmed order. Newest first, like the fixtures. */
+  addOrder: (order: PlacedOrder) => void;
   /** Replace a placed order in place, keyed by its number. */
   updateOrder: (order: PlacedOrder) => void;
-  removeOrder: (id: string) => void;
-  find: (id: string | undefined) => PlacedOrder | null;
+  removeOrder: (id: number) => void;
+  find: (id: string | number | undefined) => PlacedOrder | null;
+  /** The number the next order takes. */
+  nextOrderId: number;
 }
 
 const OrdersContext = createContext<OrdersContextValue | null>(null);
+
+/**
+ * The highest number the office had issued before this session.
+ *
+ * Kept as a floor for `nextOrderId` so the sequence carries on from the fixtures even if every
+ * order in the list is deleted — numbering is the back office's, and it does not rewind because
+ * a seller cleaned up their screen.
+ */
+const LAST_ISSUED_ID = mockOrders.reduce((highest, order) => Math.max(highest, order.id), 0);
 
 /**
  * The route's placed orders.
@@ -24,23 +37,44 @@ const OrdersContext = createContext<OrdersContextValue | null>(null);
 export function OrdersProvider({ children }: { children: ReactNode }) {
   const [orders, setOrders] = useState<PlacedOrder[]>(mockOrders);
 
+  const addOrder = useCallback((order: PlacedOrder) => {
+    setOrders((prev) => [order, ...prev]);
+  }, []);
+
   const updateOrder = useCallback((order: PlacedOrder) => {
     setOrders((prev) => prev.map((candidate) => (candidate.id === order.id ? order : candidate)));
   }, []);
 
-  const removeOrder = useCallback((id: string) => {
+  const removeOrder = useCallback((id: number) => {
     setOrders((prev) => prev.filter((candidate) => candidate.id !== id));
   }, []);
 
-  /** Tolerates `undefined` so callers can pass a route param straight through. */
+  /**
+   * Tolerates `undefined` so callers can pass a route param straight through — and a string for
+   * the same reason: navigation params arrive as text, and the id they name is a number. Parsing
+   * here rather than at every call site keeps the coercion in one place, and anything that is not
+   * a number ("", "abc", a param that was never set) finds nothing instead of matching by accident.
+   */
   const find = useCallback(
-    (id: string | undefined) => orders.find((order) => order.id === id) ?? null,
+    (id: string | number | undefined) => {
+      if (id === undefined) return null;
+      // `parseInt` and not `Number`, which turns an empty param into 0 — a real id that could one
+      // day exist, and a lookup that would then succeed for a param nobody set.
+      const numeric = typeof id === 'number' ? id : Number.parseInt(id, 10);
+      if (!Number.isFinite(numeric)) return null;
+      return orders.find((order) => order.id === numeric) ?? null;
+    },
+    [orders],
+  );
+
+  const nextOrderId = useMemo(
+    () => orders.reduce((highest, order) => Math.max(highest, order.id), LAST_ISSUED_ID) + 1,
     [orders],
   );
 
   const value = useMemo(
-    () => ({ orders, updateOrder, removeOrder, find }),
-    [orders, updateOrder, removeOrder, find],
+    () => ({ orders, addOrder, updateOrder, removeOrder, find, nextOrderId }),
+    [orders, addOrder, updateOrder, removeOrder, find, nextOrderId],
   );
 
   return <OrdersContext.Provider value={value}>{children}</OrdersContext.Provider>;

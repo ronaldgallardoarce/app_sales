@@ -13,11 +13,12 @@ import { useDialog } from '@/components/ui/dialog';
 import { Icon, type IconName } from '@/components/ui/icon';
 import { OfflineBadge } from '@/components/ui/offline-badge';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
-import { useCart } from '@/context/cart-context';
+import { useCart, useCartScope } from '@/context/cart-context';
 import { useClientVisits } from '@/context/client-visit-context';
 import { useConnectivity } from '@/context/connectivity-context';
 import { bonificationOf, useOrderIncentives } from '@/context/order-incentives-context';
 import { useOrders } from '@/context/orders-context';
+import { orderNumberLabel } from '@/data/mock-orders';
 import { type LineBonification } from '@/data/mock-bonifications';
 import { mockProducts } from '@/data/mock-catalog';
 import { calculateIncentives, PAYMENT_METHODS, type PaymentMethod } from '@/data/mock-incentives';
@@ -34,6 +35,7 @@ import {
   toDateKey,
   type OrderType,
 } from '@/data/mock-order-details';
+import { OrderSummarySheet, type OrderSummaryData } from '@/components/orders/order-summary-sheet';
 import { useContentInsets } from '@/hooks/use-content-insets';
 import { useTheme } from '@/hooks/use-theme';
 import type { CartLine, Product } from '@/types/catalog';
@@ -46,18 +48,23 @@ export default function OrderConfirmScreen() {
   const router = useRouter();
   const dialog = useDialog();
   const insets = useContentInsets();
-  const { clients, markOrder, activityOf } = useClientVisits();
-  const { lines, clearCart, totalAmount } = useCart();
+  const { clients, markOrder, openVisitOf } = useClientVisits();
+  const { lines, clearCart, endEdit, totalAmount } = useCart();
   const { offline } = useConnectivity();
 
-  const { clientId, paymentMethod: paymentParam, editOrderId } = useLocalSearchParams<{
+  const { clientId, paymentMethod: paymentParam, editOrderId, returnTo } = useLocalSearchParams<{
     clientId?: string;
     paymentMethod?: string;
     /** Set when the catalog was opened to amend a placed order. */
     editOrderId?: string;
+    /** Where saving the amended order lands. Defaults to the orders list. */
+    returnTo?: string;
   }>();
 
-  const { updateOrder, find: findOrder } = useOrders();
+  /** Same declaration the catalog makes, so a reload straight onto this screen lands right too. */
+  useCartScope(editOrderId ? 'edit' : 'draft');
+
+  const { addOrder, updateOrder, find: findOrder, nextOrderId } = useOrders();
   /**
    * The order being amended, or null for a new one. Everything below branches on this rather than
    * on the raw param, so a stale id — an order deleted from another screen while this one sat in
@@ -68,13 +75,15 @@ export default function OrderConfirmScreen() {
   const client = clients.find((c) => c.id === clientId) ?? null;
 
   /**
-   * Whether this is a remote order, inferred from the on-site check-in rather than passed
-   * along: the client screen calls `markEntry` only on the presencial path — the remote one
-   * goes straight to the catalog without it — and both routes reach this screen carrying
-   * nothing but the client id. `entered` is therefore the only shared trace of which door
-   * the seller came through.
+   * Whether this is a remote order, inferred from there being no visit open rather than passed
+   * along: an on-site order is placed from inside a visit, a remote one is placed without ever
+   * checking in, and both routes reach this screen carrying nothing but the client id.
+   *
+   * Asked of the open visit and not of the client's history, which is what makes it right on a
+   * return: a client visited this morning and phoned in the afternoon is remote for the second
+   * order, and presencial again the moment the seller checks in for a third.
    */
-  const isRemote = clientId ? !activityOf(clientId).entered : false;
+  const isRemote = clientId ? openVisitOf(clientId) === null : false;
   const paymentMethod: PaymentMethod =
     PAYMENT_METHODS.find((m) => m === paymentParam) ?? 'Contado';
 
@@ -142,6 +151,8 @@ export default function OrderConfirmScreen() {
   // from the catalog panel is the offline path.
   const confirmDisabled = lines.length === 0 || offline;
 
+  const [summaryVisible, setSummaryVisible] = useState(false);
+
   const goBack = () => (router.canGoBack() ? router.back() : router.replace('/map' as Href));
 
   // Contact and delivery point are prefilled from the client record, but the seller
@@ -157,6 +168,31 @@ export default function OrderConfirmScreen() {
    * after the start: the sheet cannot produce an inverted range.
    */
   const windowSummary = `${deliveryWindowLabelFor(fromHour, toHour)} · ${deliveryWindowSpan(fromHour, toHour)}`;
+
+  /**
+   * The order as the document the client is shown. Built from the same figures that `placeOrder`
+   * is about to store, so what the seller reads back before confirming is what gets registered —
+   * not a second calculation that could disagree with it.
+   */
+  const summaryData: OrderSummaryData | null = client
+    ? {
+        title: editing ? `Pedido ${orderNumberLabel(editing.id)}` : 'Resumen del pedido',
+        clientCode: client.code,
+        clientName: client.name,
+        meta: [
+          { label: 'Entrega', value: deliveryDateLabel(deliveryDate) },
+          { label: 'Horario', value: `${fromHour} a ${toHour}` },
+          { label: 'Pago', value: paymentMethod },
+          { label: 'Tipo', value: isRemote ? 'Remoto' : 'Presencial' },
+        ],
+        lines,
+        bonifications: result?.bonifications ?? [],
+        subtotal: totalAmount,
+        discount: discountAmount,
+        ice: iceTotal,
+        total: finalTotal,
+      }
+    : null;
 
   /** True when the date came from the calendar rather than from one of the quick chips. */
   const customDate = !dateOptions.some((option) => option.key === deliveryDate);
@@ -192,50 +228,150 @@ export default function OrderConfirmScreen() {
       total: finalTotal,
       // Back to unsent: the order on the server is no longer what the seller has agreed.
       synced: false,
+      // Spends the single edit the order gets. Set here and not when the catalog opened, because
+      // an edit the seller backed out of never happened: `saveEdit` runs only from the confirm
+      // dialog, so the order is only closed once its new lines are actually stored.
+      edited: true,
     });
   };
 
+  /**
+   * Stores the new order, so it exists everywhere an order is read from: the orders list, and the
+   * client's own "ya pidió hoy" card that decides whether a second order is a second order or an
+   * amendment of this one. Until this existed, confirming showed a dialog and left no record.
+   *
+   * Needs a client, and quietly places nothing without one. This screen is reachable by reload
+   * with no `clientId`, and an order belonging to nobody is worse in the list than an order the
+   * seller has to place again.
+   */
+  const placeOrder = () => {
+    if (!client) return;
+    const takenAt = Date.now();
+    const bonifications = result?.bonifications ?? [];
+    addOrder({
+      id: nextOrderId,
+      clientId: client.id,
+      clientCode: client.code,
+      clientName: client.name,
+      createdAtMs: takenAt,
+      createdAt: toDateKey(new Date(takenAt)),
+      deliveryDate,
+      deliveryFrom: fromHour,
+      deliveryTo: toHour,
+      paymentMethod,
+      orderType,
+      remote: isRemote,
+      status: 'confirmado',
+      // False the way a real one is: taken on the phone, sent when there is signal.
+      synced: false,
+      edited: false,
+      lines: lines.map((line) => ({ ...line })),
+      bonifications,
+      bonificationUnits: bonifications.reduce((sum, bonification) => sum + bonification.qty, 0),
+      subtotal: totalAmount,
+      discount: discountAmount,
+      ice: iceTotal,
+      total: finalTotal,
+    });
+  };
+
+  /**
+   * Stores the order (or the edit) and leaves the screen. `closeVisit` decides only whether the
+   * seller is done at this client — the order itself is recorded either way.
+   */
+  const settle = (closeVisit: boolean) => {
+    // Read before anything writes: `markOrder` below may close this very visit, and the
+    // destination depends on whether the seller was in one when they confirmed.
+    const finishedVisit = closeVisit && !editing && clientId !== undefined && openVisitOf(clientId) !== null;
+
+    if (editing) {
+      saveEdit();
+    } else {
+      placeOrder();
+      // Amending an order the client already placed is not a second sale, so it records nothing
+      // against the visit. On a remote order there is no open visit and this only records the
+      // sale — `closeVisit` has nothing to close and is harmless.
+      if (clientId) markOrder(clientId, { closeVisit });
+    }
+
+    // Dropped alongside the lines, not after them: the reply is keyed by product code,
+    // so a next order containing the same product would otherwise inherit this
+    // order's free goods. Both are scoped to the order just saved — a draft the seller
+    // had going for another client is in the other bucket and survives this untouched.
+    resetIncentives();
+    if (editing) endEdit();
+    else clearCart();
+    /**
+     * A finished visit is done with this client, so it lands on the list of the rest of them
+     * rather than on the menu of the one just closed.
+     *
+     * Rebuilt from the root instead of dismissed back to, and that is the whole fix: `dismissTo`
+     * only clears the screens above its destination when that destination is already in the
+     * stack. When it is not — the seller reached this client through "Clientes" and the map was
+     * never opened — React Navigation's POP_TO quietly degrades to replacing the top screen and
+     * leaves the rest standing. The catalog and this confirmation survived underneath, so one
+     * press of back walked straight into the order that had just been placed.
+     *
+     * Popping to the root first makes the result the same however the seller got here: home, then
+     * the list. Nothing can be left underneath because there is no "underneath" left.
+     */
+    if (finishedVisit) {
+      router.dismissAll();
+      router.push('/clients' as Href);
+      return;
+    }
+
+    /**
+     * `dismissTo`, not `replace`: the catalog and this screen are still on the stack behind us,
+     * and replacing only swaps the top one — which left the client menu with the catalog
+     * underneath it. Safe here in a way it was not above: both destinations are guaranteed to be
+     * on the stack, because the catalog is only ever pushed from the client screen, and an edit
+     * carries the screen it started from in `returnTo`.
+     */
+    router.dismissTo(
+      editing
+        ? ((returnTo ?? '/orders') as Href)
+        : clientId
+          ? ({
+              pathname: '/client/[id]',
+              params: {
+                id: clientId,
+                // A remote order came through the reason picker, and that picker is spent: the
+                // client screen is still sitting on it underneath us, so without this the seller
+                // lands back on a form offering to start the order they just placed. A
+                // presencial order carries no reset — staying in the visit means staying on the
+                // in-visit menu, which is the step that screen already has open.
+                ...(isRemote ? { step: 'menu' } : {}),
+              },
+            } as Href)
+          : ('/map' as Href),
+    );
+  };
+
   const confirm = () => {
+    /**
+     * The choice only exists when there is a visit to keep open: an edit is office work and a
+     * remote order was never on site, so both keep the single acknowledgement they had.
+     *
+     * "Finalizar visita" is the primary because most calls do end with the order — but it is a
+     * choice and not an assumption, which is the whole point: the seller who still has a task to
+     * do says so here instead of having to check in a second time for it.
+     */
+    const canStayInVisit = !editing && clientId !== undefined && openVisitOf(clientId) !== null;
+
     dialog.show({
       icon: 'checkmark.circle.fill',
       tone: 'success',
       title: editing ? 'Pedido actualizado' : 'Pedido confirmado',
       message: editing
-        ? `Se guardaron los cambios de ${editing.id}. Nuevo total: ${formatBs(finalTotal)}.`
-        : `Se registró el pedido por ${formatBs(finalTotal)}.`,
-      actions: [
-        {
-          label: 'Listo',
-          variant: 'primary',
-          onPress: () => {
-            if (editing) saveEdit();
-            // Only a new order closes the visit: amending one the client already placed is not a
-            // second sale, and marking it again would overwrite when the visit actually ended.
-            else if (clientId) markOrder(clientId);
-
-            clearCart();
-            // Dropped alongside the cart, not after it: the reply is keyed by product code,
-            // so a next order containing the same product would otherwise inherit this
-            // order's free goods.
-            resetIncentives();
-            /**
-             * `dismissTo`, not `replace`: the catalog and this screen are still on the stack
-             * behind us, and replacing only swaps the top one — which left the client menu with
-             * the catalog underneath it, so its back arrow went forwards into a finished order
-             * instead of out to the map. Dismissing pops everything above the destination, so
-             * back from there means back to where the visit actually started. Falls back to a
-             * replace on its own if the destination is not in the stack.
-             */
-            router.dismissTo(
-              editing
-                ? ('/orders' as Href)
-                : clientId
-                  ? ({ pathname: '/client/[id]', params: { id: clientId } } as Href)
-                  : ('/map' as Href),
-            );
-          },
-        },
-      ],
+        ? `Se guardaron los cambios del pedido ${orderNumberLabel(editing.id)}. Nuevo total: ${formatBs(finalTotal)}.`
+        : `Se registró el pedido ${orderNumberLabel(nextOrderId)} por ${formatBs(finalTotal)}.`,
+      actions: canStayInVisit
+        ? [
+            { label: 'Seguir en la visita', variant: 'outline', onPress: () => settle(false) },
+            { label: 'Finalizar visita', variant: 'primary', onPress: () => settle(true) },
+          ]
+        : [{ label: 'Listo', variant: 'primary', onPress: () => settle(true) }],
     });
   };
 
@@ -252,7 +388,7 @@ export default function OrderConfirmScreen() {
 
           <View style={styles.titleColumn}>
             <ThemedText type="smallBold" style={styles.headerTitle} numberOfLines={1}>
-              {editing ? `Editar ${editing.id}` : 'Confirmar pedido'}
+              {editing ? `Editar pedido ${orderNumberLabel(editing.id)}` : 'Confirmar pedido'}
             </ThemedText>
             <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
               {/* Owner: route-level context, matching every other screen header. */}
@@ -609,30 +745,57 @@ export default function OrderConfirmScreen() {
           * second half and confirm from there — what they cannot do is confirm having never
           * looked at it.
           */}
-        {tab === 'items' ? (
+        {/* The document beside the action that commits it: reading the order back to the client is
+            the last thing that happens before confirming, so it belongs in the same row rather
+            than somewhere up the form the seller has already scrolled past. Icon only — the
+            primary action keeps the words and the width. */}
+        <View style={styles.actionRow}>
           <Pressable
-            onPress={() => showTab('details')}
-            style={[styles.confirmButton, { backgroundColor: theme.accent }]}>
-            <ThemedText type="smallBold" style={{ color: theme.onAccent }}>
-              Continuar · {formatBs(finalTotal)}
-            </ThemedText>
-            <Icon name="chevron.right" size={16} color={theme.onAccent} />
-          </Pressable>
-        ) : (
-          <Pressable
-            disabled={confirmDisabled}
-            onPress={confirm}
+            disabled={lines.length === 0}
+            onPress={() => setSummaryVisible(true)}
             style={[
-              styles.confirmButton,
-              { backgroundColor: theme.success, opacity: confirmDisabled ? 0.4 : 1 },
+              styles.summaryButton,
+              {
+                backgroundColor: theme.backgroundElement,
+                borderColor: theme.border,
+                opacity: lines.length === 0 ? 0.4 : 1,
+              },
             ]}>
-            <Icon name={editing ? 'checkmark' : 'cart'} size={16} color={theme.onSuccess} />
-            <ThemedText type="smallBold" style={{ color: theme.onSuccess }}>
-              {editing ? 'Guardar cambios' : 'Confirmar pedido'} · {formatBs(finalTotal)}
-            </ThemedText>
+            <Icon name="doc.text" size={17} color={theme.accent} />
           </Pressable>
-        )}
+
+          {tab === 'items' ? (
+            <Pressable
+              onPress={() => showTab('details')}
+              style={[styles.confirmButton, styles.actionGrow, { backgroundColor: theme.accent }]}>
+              <ThemedText type="smallBold" style={{ color: theme.onAccent }}>
+                Continuar · {formatBs(finalTotal)}
+              </ThemedText>
+              <Icon name="chevron.right" size={16} color={theme.onAccent} />
+            </Pressable>
+          ) : (
+            <Pressable
+              disabled={confirmDisabled}
+              onPress={confirm}
+              style={[
+                styles.confirmButton,
+                styles.actionGrow,
+                { backgroundColor: theme.success, opacity: confirmDisabled ? 0.4 : 1 },
+              ]}>
+              <Icon name={editing ? 'checkmark' : 'cart'} size={16} color={theme.onSuccess} />
+              <ThemedText type="smallBold" style={{ color: theme.onSuccess }}>
+                {editing ? 'Guardar cambios' : 'Confirmar pedido'} · {formatBs(finalTotal)}
+              </ThemedText>
+            </Pressable>
+          )}
+        </View>
       </View>
+
+      <OrderSummarySheet
+        data={summaryData}
+        visible={summaryVisible}
+        onClose={() => setSummaryVisible(false)}
+      />
 
       <DeliveryPointSheet
         visible={pointSheetVisible}
@@ -683,7 +846,10 @@ type ConfirmTab = 'items' | 'details';
 
 const CONFIRM_TABS: readonly { key: ConfirmTab; label: string }[] = [
   { key: 'items', label: 'Productos' },
-  { key: 'details', label: 'Entrega' },
+  // Not "Entrega": this half also carries the client, the order type and the contact, and it
+  // holds a section actually called "Entrega" further down, so the tab would be naming a part
+  // of its own contents.
+  { key: 'details', label: 'Datos del pedido' },
 ];
 
 /**
@@ -1242,6 +1408,23 @@ const styles = StyleSheet.create({
     gap: 8,
     height: ControlHeight.input,
     borderRadius: Radius.md,
+    marginTop: Spacing.two,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  actionGrow: {
+    flex: 1,
+  },
+  summaryButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: ControlHeight.input,
+    height: ControlHeight.input,
+    borderRadius: Radius.md,
+    borderWidth: 1,
     marginTop: Spacing.two,
   },
   // Same idiom as the order panel's notices, so a blocked action reads the same

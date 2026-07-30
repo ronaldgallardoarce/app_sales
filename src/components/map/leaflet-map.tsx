@@ -7,6 +7,9 @@ import type { BlockPolygon, MapClient, VisitStatus } from '@/data/mock-clients';
 /** Fallback center (Santa Cruz de la Sierra, Bolivia) used when there are no markers to fit. */
 const DEFAULT_CENTER = { lat: -17.7678, lng: -63.1771 };
 
+/** Stable empty default, so omitting `liveClientIds` does not rebuild the whole map every render. */
+const EMPTY_IDS: string[] = [];
+
 type LatLng = { lat: number; lng: number };
 
 type MapColors = {
@@ -32,7 +35,9 @@ function buildHtml(
   routeLegs: LatLng[][] | null,
   directionsLegs: LatLng[][] | null,
   pickMode: boolean,
+  liveClientIds: string[],
 ): string {
+  const live = new Set(liveClientIds);
   const markers = clients.map((c) => ({
     id: c.id,
     lat: c.lat,
@@ -40,6 +45,10 @@ function buildHtml(
     status: c.status,
     // Clients not on today's planned route get a dashed pin outline.
     offRoute: !c.visitToday,
+    // The seller is standing in this one right now. Carried separately from the status because
+    // the two stopped being the same thing: a client who ordered and was stayed with reads
+    // "visitado" while still being inside.
+    live: live.has(c.id),
   }));
 
   return `<!DOCTYPE html>
@@ -56,6 +65,20 @@ function buildHtml(
     html, body, #map { height: 100%; margin: 0; padding: 0; background: transparent; }
     .leaflet-container { font-family: system-ui, sans-serif; }
     .pin-icon { background: transparent; border: none; }
+    /* A visit in progress. The pin grows from its own tip, so it never drifts off the address it
+       is marking, and it is lifted above its neighbours — the one pin worth finding in a cluster
+       of them should not be the one hidden underneath. */
+    @keyframes pinLive {
+      0%   { transform: scale(1); }
+      50%  { transform: scale(1.16); }
+      100% { transform: scale(1); }
+    }
+    .pin-live { z-index: 1000 !important; }
+    .pin-live svg {
+      transform-origin: 50% 100%;
+      animation: pinLive 1.4s ease-in-out infinite;
+      filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.35));
+    }
     .locate-btn { width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; background: #fff; cursor: pointer; }
   </style>
 </head>
@@ -108,7 +131,13 @@ function buildHtml(
       BOUNDS_POLY.forEach(function (corner) { bounds.push(corner); });
     }
 
-    function pinIcon(color, label) {
+    // Both pin builders take the same live flag and do the same thing with it: add a class and
+    // let the stylesheet animate. Nothing about the drawing changes, so a pin in a visit is still
+    // recognisably the same pin in the same colour — only breathing.
+    // (No backticks anywhere in here: this whole document is a template literal.)
+    function liveClass(live) { return live ? 'pin-icon pin-live' : 'pin-icon'; }
+
+    function pinIcon(color, label, live) {
       var center = label
         ? '<circle cx="14" cy="14" r="8.5" fill="#ffffff"/><text x="14" y="18" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="700" fill="' + color + '">' + label + '</text>'
         : '<circle cx="14" cy="14" r="5.5" fill="#ffffff"/>';
@@ -117,7 +146,7 @@ function buildHtml(
         + center + '</svg>';
       return L.divIcon({
         html: svg,
-        className: 'pin-icon',
+        className: liveClass(live),
         iconSize: [28, 38],
         iconAnchor: [14, 38],
         popupAnchor: [0, -34]
@@ -129,7 +158,7 @@ function buildHtml(
     // it reads as "one of the others, not a priority" — visible, yet never louder
     // than the on-route pins and never like a different owner's pin.
     var PIN_PATH = 'M14 0C6.27 0 0 6.27 0 14c0 10.5 14 24 14 24s14-13.5 14-24C28 6.27 21.73 0 14 0z';
-    function offRoutePinIcon(color, label, dashColor) {
+    function offRoutePinIcon(color, label, dashColor, live) {
       var center = label
         ? '<circle cx="14" cy="14" r="8.5" fill="#ffffff"/><text x="14" y="18" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="700" fill="' + color + '">' + label + '</text>'
         : '<circle cx="14" cy="14" r="5.5" fill="#ffffff"/>';
@@ -139,7 +168,7 @@ function buildHtml(
         + center + '</svg>';
       return L.divIcon({
         html: svg,
-        className: 'pin-icon',
+        className: liveClass(live),
         iconSize: [28, 38],
         iconAnchor: [14, 38],
         popupAnchor: [0, -34]
@@ -221,7 +250,9 @@ function buildHtml(
     CLIENTS.forEach(function (c) {
       var color = STATUS_COLORS[c.status] || '#888888';
       var label = ORDER[c.id] ? String(ORDER[c.id]) : '';
-      var icon = c.offRoute ? offRoutePinIcon(color, label, OFFROUTE_COLOR) : pinIcon(color, label);
+      var icon = c.offRoute
+        ? offRoutePinIcon(color, label, OFFROUTE_COLOR, c.live)
+        : pinIcon(color, label, c.live);
       var marker = L.marker([c.lat, c.lng], { icon: icon });
       marker.on('click', function () {
         if (!window.ReactNativeWebView) return;
@@ -379,6 +410,7 @@ export function LeafletMap({
   routeLegs,
   directionsLegs,
   pickMode,
+  liveClientIds,
   onSelect,
   onPickPoint,
 }: {
@@ -394,6 +426,8 @@ export function LeafletMap({
   routeLegs?: LatLng[][] | null;
   directionsLegs?: LatLng[][] | null;
   pickMode?: boolean;
+  /** Clients with a visit open right now — their pins breathe and sit above the rest. */
+  liveClientIds?: string[];
   onSelect: (id: string) => void;
   onPickPoint?: (point: LatLng) => void;
 }) {
@@ -412,6 +446,7 @@ export function LeafletMap({
         routeLegs ?? null,
         directionsLegs ?? null,
         pickMode ?? false,
+        liveClientIds ?? EMPTY_IDS,
       ),
     [
       clients,
@@ -426,6 +461,7 @@ export function LeafletMap({
       routeLegs,
       directionsLegs,
       pickMode,
+      liveClientIds,
     ],
   );
 

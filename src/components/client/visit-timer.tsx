@@ -4,12 +4,8 @@ import { StyleSheet, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
 import { Radius } from '@/constants/theme';
-import { useClientVisits } from '@/context/client-visit-context';
-import type { VisitStatus } from '@/data/mock-clients';
+import { useClientVisits, visitDuration } from '@/context/client-visit-context';
 import { useTheme } from '@/hooks/use-theme';
-
-/** Visit workflow states where the visit has been closed and its total time is final. */
-const TERMINAL_STATUSES: VisitStatus[] = ['trabajado', 'visitado', 'cerrado-observado'];
 
 /** Formats an elapsed duration as `mm:ss`, or `h:mm:ss` once it passes an hour. */
 function formatDuration(ms: number): string {
@@ -22,21 +18,22 @@ function formatDuration(ms: number): string {
 }
 
 /**
- * Shows the visit duration for a client: a live counter while the visit is
- * "iniciado", or the final elapsed time once the seller has checked out.
- * Renders nothing when there is no timing data for the client.
+ * Shows the duration of the client's current visit: a live counter while the seller is inside,
+ * or the final elapsed time once it closed. Renders nothing for a client with no visits.
+ *
+ * Reads the visit rather than the status, which is what lets it tell a returning seller's second
+ * visit from the first one it replaced: the status is a summary of the day, the visit is the
+ * thing being timed.
  *
  * `compact` drops the icon and caption so the timer fits a screen header row
  * without competing with the title.
  */
 export function VisitTimer({ clientId, compact = false }: { clientId: string; compact?: boolean }) {
   const theme = useTheme();
-  const { statusOf, startedAtOf, endedAtOf } = useClientVisits();
+  const { currentVisitOf } = useClientVisits();
 
-  const status = statusOf(clientId);
-  const startedAt = startedAtOf(clientId);
-  const endedAt = endedAtOf(clientId);
-  const live = status === 'iniciado' && startedAt != null;
+  const visit = currentVisitOf(clientId);
+  const live = visit !== null && visit.endedAt === null;
 
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -45,10 +42,9 @@ export function VisitTimer({ clientId, compact = false }: { clientId: string; co
     return () => clearInterval(id);
   }, [live]);
 
-  const isTerminal = TERMINAL_STATUSES.includes(status) && startedAt != null && endedAt != null;
-  if (!live && !isTerminal) return null;
+  if (!visit) return null;
 
-  const duration = live ? now - (startedAt as number) : (endedAt as number) - (startedAt as number);
+  const duration = visitDuration(visit, now);
   const tone = live ? theme.accentAlt : theme.textSecondary;
   const soft = live ? theme.accentAltSoft : theme.backgroundSelected;
 

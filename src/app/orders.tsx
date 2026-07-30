@@ -3,19 +3,20 @@ import { useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ActiveVisitBar } from '@/components/client/active-visit-bar';
 import { OrderCard } from '@/components/orders/order-card';
 import { OrderDetailSheet } from '@/components/orders/order-detail-sheet';
+import { OrderSummarySheet, summaryFromOrder } from '@/components/orders/order-summary-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { DatePickerDialog } from '@/components/ui/date-picker';
-import { useDialog } from '@/components/ui/dialog';
 import { Icon } from '@/components/ui/icon';
 import { OfflineBadge } from '@/components/ui/offline-badge';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
-import { useCart } from '@/context/cart-context';
 import { useOrders } from '@/context/orders-context';
 import { fromDateKey, toDateKey } from '@/data/mock-order-details';
-import { type PlacedOrder } from '@/data/mock-orders';
+import type { PlacedOrder } from '@/data/mock-orders';
 import { useContentInsets } from '@/hooks/use-content-insets';
+import { useOrderActions } from '@/hooks/use-order-actions';
 import { useTheme } from '@/hooks/use-theme';
 import { formatBs } from '@/utils/currency';
 import {
@@ -44,15 +45,18 @@ const PERIODS: PeriodKey[] = ['hoy', '7', '30', 'rango'];
 export default function OrdersScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const dialog = useDialog();
   const insets = useContentInsets();
 
   const [filters, setFilters] = useState<OrderFilters>(DEFAULT_ORDER_FILTERS);
   /** Which end of the custom range the calendar is open for. */
   const [editingEnd, setEditingEnd] = useState<'from' | 'to' | null>(null);
-  const [openOrderId, setOpenOrderId] = useState<string | null>(null);
-  const { orders: allOrders, removeOrder } = useOrders();
-  const { lines: cartLines, upsertLines, clearCart } = useCart();
+  const [openOrderId, setOpenOrderId] = useState<number | null>(null);
+  /** The order whose shareable summary is open. Held by value, not by id: the summary is a
+      snapshot being read aloud, and it should survive the list changing underneath it. */
+  const [summaryOrder, setSummaryOrder] = useState<PlacedOrder | null>(null);
+  const { orders: allOrders } = useOrders();
+  // Shared with the client screen, which opens the same sheet on the same orders.
+  const { startEdit, confirmDelete } = useOrderActions();
 
   const orders = useMemo(() => filterOrders(allOrders, filters), [allOrders, filters]);
   const summary = useMemo(() => summariseOrders(orders), [orders]);
@@ -65,77 +69,6 @@ export default function OrdersScreen() {
     () => allOrders.find((order) => order.id === openOrderId) ?? null,
     [allOrders, openOrderId],
   );
-
-  const confirmDelete = (order: PlacedOrder) => {
-    dialog.show({
-      icon: 'trash',
-      tone: 'danger',
-      title: `¿Eliminar ${order.id}?`,
-      message: `Se eliminará el pedido de ${order.clientName}. No se puede deshacer.`,
-      actions: [
-        { label: 'Cancelar', variant: 'outline' },
-        {
-          label: 'Eliminar',
-          variant: 'primary',
-          tone: 'danger',
-          onPress: () => {
-            removeOrder(order.id);
-            // Closes the sheet as well: it was showing the order that just stopped existing.
-            setOpenOrderId(null);
-          },
-        },
-      ],
-    });
-  };
-
-  /**
-   * Reopens the order in the catalog with its lines loaded, carrying its number along so the
-   * confirm screen saves over it instead of taking a new one.
-   *
-   * The cart is emptied first: it holds one order at a time, and `upsertLines` merges by product
-   * code, so anything already in there would silently become part of the order being edited.
-   */
-  const openForEdit = (order: PlacedOrder) => {
-    clearCart();
-    // Copied, not handed over: the cart replaces line objects rather than mutating them today, so
-    // sharing them would work — but a stored order and a live cart pointing at the same objects is
-    // the kind of coupling that turns into a corrupted record the first time that changes.
-    upsertLines(order.lines.map((line) => ({ ...line })));
-    setOpenOrderId(null);
-    router.push({
-      pathname: '/catalog',
-      params: { clientId: order.clientId, editOrderId: order.id },
-    } as Href);
-  };
-
-  /**
-   * Starting an edit destroys whatever is in the cart, and the seller may have been half way
-   * through a different order. Asks before doing it, and only then — a warning on an empty cart
-   * is a warning about nothing.
-   */
-  const startEdit = (order: PlacedOrder) => {
-    if (cartLines.length === 0) {
-      openForEdit(order);
-      return;
-    }
-    dialog.show({
-      icon: 'pencil',
-      tone: 'accentAlt',
-      title: '¿Descartar el pedido en curso?',
-      message: `Tenés ${cartLines.length} ${
-        cartLines.length === 1 ? 'producto' : 'productos'
-      } sin confirmar. Editar ${order.id} va a reemplazarlos.`,
-      actions: [
-        { label: 'Cancelar', variant: 'outline' },
-        {
-          label: `Editar ${order.id}`,
-          variant: 'primary',
-          tone: 'accentAlt',
-          onPress: () => openForEdit(order),
-        },
-      ],
-    });
-  };
 
   const selectPeriod = (period: PeriodKey) => {
     // Entering the range seeds both ends with today, so the calendar opens somewhere real and the
@@ -164,6 +97,8 @@ export default function OrdersScreen() {
           <OfflineBadge />
         </View>
       </SafeAreaView>
+
+      <ActiveVisitBar />
 
       <View style={styles.controls}>
         <View style={[styles.searchBox, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
@@ -246,7 +181,7 @@ export default function OrdersScreen() {
 
       <FlatList
         data={orders}
-        keyExtractor={(order) => order.id}
+        keyExtractor={(order) => String(order.id)}
         renderItem={({ item }) => <OrderCard order={item} onPress={() => setOpenOrderId(item.id)} />}
         contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + Spacing.three }]}
         showsVerticalScrollIndicator={false}
@@ -290,8 +225,21 @@ export default function OrdersScreen() {
       <OrderDetailSheet
         order={openOrder}
         onClose={() => setOpenOrderId(null)}
-        onEdit={() => openOrder && startEdit(openOrder)}
-        onDelete={() => openOrder && confirmDelete(openOrder)}
+        onEdit={() => openOrder && startEdit(openOrder, () => setOpenOrderId(null))}
+        // Closes the sheet as well: it was showing the order that just stopped existing.
+        onDelete={() => openOrder && confirmDelete(openOrder, () => setOpenOrderId(null))}
+        // Hands the order over before closing, so the summary keeps something to show once the
+        // sheet that opened it is gone.
+        onShowSummary={() => {
+          setSummaryOrder(openOrder);
+          setOpenOrderId(null);
+        }}
+      />
+
+      <OrderSummarySheet
+        data={summaryOrder ? summaryFromOrder(summaryOrder) : null}
+        visible={summaryOrder !== null}
+        onClose={() => setSummaryOrder(null)}
       />
     </View>
   );
