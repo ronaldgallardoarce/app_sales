@@ -44,7 +44,7 @@ export type PlacedOrder = {
   clientName: string;
   /**
    * When the order was taken, to the millisecond. Needed as a real instant and not just a day,
-   * because the edit window is 48 hours from this point — a day key would make an order taken
+   * because the edit window is measured from this point — a day key would make an order taken
    * last night either two days old or one, depending on nothing but which side of midnight the
    * seller is standing on.
    */
@@ -73,7 +73,9 @@ export type PlacedOrder = {
 };
 
 /** How long after it was taken an order may still be edited. */
-export const EDIT_WINDOW_HOURS = 48;
+export const EDIT_WINDOW_HOURS = 2;
+
+const EDIT_WINDOW_MS = EDIT_WINDOW_HOURS * 60 * 60 * 1000;
 
 /**
  * Whether the order is still inside its edit window.
@@ -83,18 +85,40 @@ export const EDIT_WINDOW_HOURS = 48;
  * frozen regardless of age, that is a second rule and it belongs here.
  */
 export function canEditOrder(order: PlacedOrder, now: number = Date.now()): boolean {
-  return now - order.createdAtMs < EDIT_WINDOW_HOURS * 60 * 60 * 1000;
+  return now - order.createdAtMs < EDIT_WINDOW_MS;
 }
 
-/** Whole hours left in the edit window, floored, or 0 once it has closed. */
-export function editHoursLeft(order: PlacedOrder, now: number = Date.now()): number {
-  const msLeft = order.createdAtMs + EDIT_WINDOW_HOURS * 60 * 60 * 1000 - now;
-  return msLeft <= 0 ? 0 : Math.floor(msLeft / (60 * 60 * 1000));
+/**
+ * How much of the edit window is left, spoken the way it is read out: "1 h 20 min", "45 min".
+ *
+ * Minutes and not whole hours, and that is not cosmetic. This used to floor the remainder to
+ * hours, which was harmless while the window was two days wide and became a lie the moment it
+ * became two: an order with fifty minutes left reported "0 horas más" — the window open, the
+ * button live, and the sentence under it saying the time was gone.
+ */
+export function editTimeLeftLabel(order: PlacedOrder, now: number = Date.now()): string {
+  const minutes = Math.max(Math.floor((order.createdAtMs + EDIT_WINDOW_MS - now) / 60_000), 0);
+  if (minutes < 60) return `${minutes} min`;
+
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
 }
 
 /** A timestamp `hours` hours before now, so fixtures land on both sides of the edit window. */
 function hoursAgo(hours: number): number {
   return Date.now() - hours * 60 * 60 * 1000;
+}
+
+/**
+ * The same, in minutes — the only way to place a fixture inside a two-hour window.
+ *
+ * With the window at two days the freshest fixture could be hours old and still editable. At two
+ * hours every one of them fell outside it, which would have left the edit path unreachable in the
+ * mock data: not a broken rule, but a feature no one could see working.
+ */
+function minutesAgo(minutes: number): number {
+  return Date.now() - minutes * 60 * 1000;
 }
 
 /** A day key `offset` days before today. */
@@ -195,7 +219,7 @@ export const mockOrders: PlacedOrder[] = [
   order({
     id: 'P-004518',
     clientId: mapClients[0]?.id ?? 'c1',
-    createdAtMs: hoursAgo(3),
+    createdAtMs: minutesAgo(35),
     deliveryDate: futureKey(1),
     deliveryFrom: '08:00',
     deliveryTo: '12:00',
@@ -215,7 +239,7 @@ export const mockOrders: PlacedOrder[] = [
   order({
     id: 'P-004517',
     clientId: mapClients[1]?.id ?? 'c2',
-    createdAtMs: hoursAgo(9),
+    createdAtMs: minutesAgo(105),
     deliveryDate: futureKey(2),
     deliveryFrom: '14:00',
     deliveryTo: '18:00',
