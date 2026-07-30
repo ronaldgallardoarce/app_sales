@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -98,6 +98,26 @@ export default function OrderConfirmScreen() {
   const [windowSheetVisible, setWindowSheetVisible] = useState(false);
   const [fromHour, setFromHour] = useState<string>(editing?.deliveryFrom ?? DELIVERY_WINDOWS[1].from);
   const [toHour, setToHour] = useState<string>(editing?.deliveryTo ?? DELIVERY_WINDOWS[1].to);
+  /**
+   * Which half of the form is on screen. Opens on the products, because that is the half the
+   * seller arrives holding: they came from the catalog, and "is this the order?" is still the
+   * open question — the delivery terms answer one nobody has asked yet.
+   */
+  const [tab, setTab] = useState<ConfirmTab>('items');
+  const scrollRef = useRef<ScrollView>(null);
+
+  /**
+   * Both halves share one scroll view, so the offset has to be reset by hand. The products can
+   * run several screens and the delivery form is short, so switching without this drops the
+   * seller into the middle of the other half — or, when that half is shorter than the offset,
+   * wherever the scroll view happens to clamp. Unanimated on purpose: this is not travel across
+   * a form, it is a different form arriving.
+   */
+  const showTab = (next: ConfirmTab) => {
+    if (next === tab) return;
+    setTab(next);
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  };
 
   const iceTotal = useMemo(() => iceTotalOf(lines), [lines]);
 
@@ -145,8 +165,8 @@ export default function OrderConfirmScreen() {
    * Writes the amended order back over the one being edited.
    *
    * `id`, `createdAtMs` and `status` are carried across untouched: this is the same order, and
-   * resetting its creation instant would silently hand it a fresh 48-hour edit window every time
-   * it was saved. The amounts are recomputed from the lines as they now stand, because the whole
+   * resetting its creation instant would silently hand it a fresh edit window every time it was
+   * saved. The amounts are recomputed from the lines as they now stand, because the whole
    * point of the edit was that the lines changed.
    */
   const saveEdit = () => {
@@ -270,269 +290,300 @@ export default function OrderConfirmScreen() {
             </ThemedText>
           </View>
         </View>
+        {/* Pinned with the client card and above the scroll, because a switch that scrolls away
+            stops being a way back: the point of the split is that either half stays one tap from
+            the other, at any depth in either of them. */}
+        <ConfirmTabs active={tab} itemCount={lines.length} onChange={showTab} />
       </View>
 
       <ScrollView
+        ref={scrollRef}
+        style={styles.scroll}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.three }]}>
-        <SectionLabel>Detalle del pedido</SectionLabel>
-        {lines.length === 0 ? (
-          <View style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-            <ThemedText themeColor="textSecondary" style={styles.emptyText}>
-              El pedido no tiene productos.
-            </ThemedText>
-          </View>
-        ) : (
-          lines.map((line) => {
-            const amount = lineAmount(line);
-            const lineDiscount = (amount * incentives.discountPct) / 100;
-            return (
-              <View
-                key={String(line.productId)}
-                style={[
-                  styles.itemCard,
-                  {
-                    backgroundColor: theme.backgroundElement,
-                    borderTopColor: theme.border,
-                    borderRightColor: theme.border,
-                    borderBottomColor: theme.border,
-                    borderLeftColor: theme.accent,
-                  },
-                ]}>
-                {/* Same three rows as the catalog's order panel — what it is, how much
-                    of it, what it costs — so a line the seller already reviewed there
-                    does not rearrange itself on the screen where they confirm it. */}
-                <View style={styles.itemTop}>
-                  <ThemedText type="smallBold" numberOfLines={1} style={styles.itemName}>
-                    {line.productName}
-                  </ThemedText>
-                  <ThemedText style={[styles.itemAmount, { color: theme.success }]} numberOfLines={1}>
-                    {formatBs(amount - lineDiscount)}
-                  </ThemedText>
-                </View>
-
-                <ThemedText themeColor="textSecondary" numberOfLines={1} style={styles.qtyText}>
-                  {lineQtyDetail(line)}
-                </ThemedText>
-
-                <View style={styles.itemFooter}>
-                  <ThemedText themeColor="textSecondary" style={styles.metaLabel}>
-                    ICE {formatBs(lineIce(line))}
-                  </ThemedText>
-                  {/* Money only — the percentage was identical on every line, so repeating it
-                      down the list said nothing the totals do not say once. Abbreviated here
-                      and spelled out in the totals: this row shares its width with the ICE
-                      figure, and the totals row has a column to itself. */}
-                  {lineDiscount > 0 ? (
-                    <ThemedText style={[styles.metaLabel, { color: theme.accent }]}>
-                      Desc. −{formatBs(lineDiscount)}
+        // The second half is mostly fields, so a tap that lands while the keyboard is up is far
+        // more likely to be aimed at a chip or a sheet than at dismissing it.
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.content}>
+        {tab === 'items' ? (
+          <>
+          <SectionLabel>Detalle del pedido</SectionLabel>
+          {lines.length === 0 ? (
+            <View style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+              <ThemedText themeColor="textSecondary" style={styles.emptyText}>
+                El pedido no tiene productos.
+              </ThemedText>
+            </View>
+          ) : (
+            lines.map((line) => {
+              const amount = lineAmount(line);
+              const lineDiscount = (amount * incentives.discountPct) / 100;
+              return (
+                <View
+                  key={String(line.productId)}
+                  style={[
+                    styles.itemCard,
+                    {
+                      backgroundColor: theme.backgroundElement,
+                      borderTopColor: theme.border,
+                      borderRightColor: theme.border,
+                      borderBottomColor: theme.border,
+                      borderLeftColor: theme.accent,
+                    },
+                  ]}>
+                  {/* Same two rows as the catalog's order panel — what it is and what it costs,
+                      then the small print under both — so a line the seller already reviewed
+                      there does not rearrange itself on the screen where they confirm it. */}
+                  <View style={styles.itemTop}>
+                    <ThemedText type="smallBold" numberOfLines={1} style={styles.itemName}>
+                      {line.productName}
                     </ThemedText>
-                  ) : null}
+                    <ThemedText style={[styles.itemAmount, { color: theme.success }]} numberOfLines={1}>
+                      {formatBs(amount - lineDiscount)}
+                    </ThemedText>
+                  </View>
+
+                  {/* Quantity and ICE share one row and one separator, because they are the same
+                      kind of thing — the small print behind the amount above — and each was
+                      spending a whole line on a handful of characters. The quantity leads, so a
+                      line too narrow for both truncates the tax and not the count: the count is
+                      the one the seller reads back to the client. */}
+                  <View style={styles.itemFooter}>
+                    <ThemedText themeColor="textSecondary" numberOfLines={1} style={styles.itemMeta}>
+                      {lineQtyDetail(line)} · ICE {formatBs(lineIce(line))}
+                    </ThemedText>
+                    {/* Money only — the percentage was identical on every line, so repeating it
+                        down the list said nothing the totals do not say once. Abbreviated here
+                        and spelled out in the totals. */}
+                    {lineDiscount > 0 ? (
+                      <ThemedText numberOfLines={1} style={[styles.itemDiscount, { color: theme.accent }]}>
+                        Desc. −{formatBs(lineDiscount)}
+                      </ThemedText>
+                    ) : null}
+                  </View>
+
+                  {/* Free goods hang off the line that earned them rather than being collected
+                      into one list: the award is per line and the seller has to be able to see
+                      which purchase produced it. */}
+                  <GiftRow
+                    line={line}
+                    bonification={bonificationOf(result, line.productId)}
+                    onChangeGift={() => setGiftLineId(line.productId)}
+                  />
+                </View>
+              );
+            })
+          )}
+
+          {/* Totals — the discount the previous screen sent us to calculate. */}
+          <View style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+            <TotalRow label="ICE" value={formatBs(iceTotal)} />
+            <TotalRow label="Pago" value={paymentMethod} />
+            <TotalRow label="Subtotal" value={formatBs(totalAmount)} />
+            {/* Just "Descuento" and an amount. The reasons behind it carried their own
+                percentages, which is exactly what was asked to come out. */}
+            {discountAmount > 0 ? (
+              <TotalRow label="Descuento" value={`−${formatBs(discountAmount)}`} tone={theme.accent} />
+            ) : null}
+            {/* No whole-order "Bonificación" row: free goods are per line now and each item card
+                carries its own, so a single summary line here told a second, vaguer version of
+                the same story. */}
+            <View style={[styles.grandTotalRow, { borderTopColor: theme.border }]}>
+              <ThemedText type="smallBold" style={styles.grandTotalLabel}>
+                Total general
+              </ThemedText>
+              <ThemedText style={[styles.grandTotalValue, { color: theme.success }]}>
+                {formatBs(finalTotal)}
+              </ThemedText>
+            </View>
+          </View>
+          </>
+        ) : (
+          <>
+          <SectionLabel>Cliente y facturación</SectionLabel>
+          <View style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+            <FieldRow icon="person.fill" label="Cliente" value={client?.name ?? '—'} />
+            <FieldRow icon="tag.fill" label="Código" value={client?.code ?? '—'} />
+            <FieldRow icon="doc.text" label="NIT" value={details?.nit ?? '—'} />
+            <FieldRow icon="person.crop.circle" label="Razón social" value={details?.razonSocial ?? '—'} />
+          </View>
+
+          <SectionLabel>Tipo de pedido</SectionLabel>
+          <View style={[styles.segment, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+            {ORDER_TYPES.map((type) => (
+              <Pressable
+                key={type}
+                onPress={() => setOrderType(type)}
+                style={[styles.segmentButton, orderType === type ? { backgroundColor: theme.accent } : null]}>
+                <ThemedText
+                  type="smallBold"
+                  numberOfLines={1}
+                  style={[
+                    styles.segmentText,
+                    { color: orderType === type ? theme.onAccent : theme.textSecondary },
+                  ]}>
+                  {type}
+                </ThemedText>
+              </Pressable>
+            ))}
+          </View>
+
+          <SectionLabel>Punto de entrega</SectionLabel>
+          {/* One row that opens a searchable sheet: a client can have many points, and
+              listing them here would push the rest of the form off screen. */}
+          <Pressable
+            onPress={() => setPointSheetVisible(true)}
+            style={[styles.selectRow, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+            <Icon name="mappin" size={15} color={theme.accent} />
+            <View style={styles.optionTexts}>
+              {selectedPoint ? (
+                <>
+                  <ThemedText type="smallBold" numberOfLines={1} style={styles.optionLabel}>
+                    {deliveryPointLabel(selectedPoint)}
+                  </ThemedText>
+                  <ThemedText themeColor="textSecondary" style={styles.metaLabel} numberOfLines={1}>
+                    {selectedPoint.address}
+                  </ThemedText>
+                </>
+              ) : (
+                <ThemedText themeColor="textSecondary" style={styles.optionLabel}>
+                  Elegir punto de entrega
+                </ThemedText>
+              )}
+            </View>
+            <ThemedText themeColor="textSecondary" style={styles.metaLabel}>
+              {details?.deliveryPoints.length ?? 0}
+            </ThemedText>
+            <Icon name="chevron.down" size={13} color={theme.textSecondary} />
+          </Pressable>
+
+          <SectionLabel>Persona de contacto</SectionLabel>
+          <TextInput
+            value={contactValue}
+            onChangeText={setContact}
+            placeholder="Nombre de quien recibe"
+            placeholderTextColor={theme.textSecondary}
+            style={[
+              styles.input,
+              { color: theme.text, borderColor: theme.border, backgroundColor: theme.backgroundElement },
+            ]}
+          />
+
+          <SectionLabel>Observaciones</SectionLabel>
+          <TextInput
+            value={notes}
+            onChangeText={setNotes}
+            placeholder="Instrucciones para la entrega (opcional)"
+            placeholderTextColor={theme.textSecondary}
+            multiline
+            style={[
+              styles.input,
+              styles.notesInput,
+              { color: theme.text, borderColor: theme.border, backgroundColor: theme.backgroundElement },
+            ]}
+          />
+
+          <SectionLabel>Entrega</SectionLabel>
+          <View style={[styles.card, styles.deliveryCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+            {/* The next three days are one tap, because they are almost every order; anything
+                further out goes through the calendar. Both feed the same value, so the chip row
+                stays highlighted when the calendar happens to land on one of those days. */}
+            <View style={styles.deliveryField}>
+              <ThemedText themeColor="textSecondary" style={styles.fieldCaption}>
+                ¿Qué día se entrega?
+              </ThemedText>
+              {/* Quick days on the left, calendar on the right — the same shape the tasks form
+                  uses for an expiry date, so the way to reach a calendar is one thing the seller
+                  learns once. */}
+              <View style={styles.dateRow}>
+                <View style={styles.dateChoices}>
+                  {dateOptions.map((option) => {
+                    const active = option.key === deliveryDate;
+                    return (
+                      <Pressable
+                        key={option.key}
+                        onPress={() => setDeliveryDate(option.key)}
+                        style={[
+                          styles.dateChip,
+                          {
+                            backgroundColor: active ? theme.accent : theme.background,
+                            borderColor: active ? theme.accent : theme.border,
+                          },
+                        ]}>
+                        <ThemedText
+                          type="smallBold"
+                          numberOfLines={1}
+                          style={[styles.dateChipText, { color: active ? theme.onAccent : theme.text }]}>
+                          {option.label}
+                        </ThemedText>
+                      </Pressable>
+                    );
+                  })}
                 </View>
 
-                {/* Free goods hang off the line that earned them rather than being collected
-                    into one list: the award is per line and the seller has to be able to see
-                    which purchase produced it. */}
-                <GiftRow
-                  line={line}
-                  bonification={bonificationOf(result, line.productId)}
-                  onChangeGift={() => setGiftLineId(line.productId)}
-                />
+                <Pressable
+                  onPress={() => setDateSheetVisible(true)}
+                  style={[
+                    styles.dateButton,
+                    {
+                      backgroundColor: customDate ? theme.accentSoft : theme.background,
+                      borderColor: customDate ? theme.accent : theme.border,
+                    },
+                  ]}>
+                  <Icon name="calendar" size={17} color={theme.accent} />
+                </Pressable>
               </View>
-            );
-          })
-        )}
-
-        {/* Totals — the discount the previous screen sent us to calculate. */}
-        <View style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-          <TotalRow label="ICE" value={formatBs(iceTotal)} />
-          <TotalRow label="Pago" value={paymentMethod} />
-          <TotalRow label="Subtotal" value={formatBs(totalAmount)} />
-          {/* Just "Descuento" and an amount. The reasons behind it carried their own
-              percentages, which is exactly what was asked to come out. */}
-          {discountAmount > 0 ? (
-            <TotalRow label="Descuento" value={`−${formatBs(discountAmount)}`} tone={theme.accent} />
-          ) : null}
-          {/* No whole-order "Bonificación" row: free goods are per line now and each item card
-              carries its own, so a single summary line here told a second, vaguer version of
-              the same story. */}
-          <View style={[styles.grandTotalRow, { borderTopColor: theme.border }]}>
-            <ThemedText type="smallBold" style={styles.grandTotalLabel}>
-              Total general
-            </ThemedText>
-            <ThemedText style={[styles.grandTotalValue, { color: theme.success }]}>
-              {formatBs(finalTotal)}
-            </ThemedText>
-          </View>
-        </View>
-
-        <SectionLabel>Cliente y facturación</SectionLabel>
-        <View style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-          <FieldRow icon="person.fill" label="Cliente" value={client?.name ?? '—'} />
-          <FieldRow icon="tag.fill" label="Código" value={client?.code ?? '—'} />
-          <FieldRow icon="doc.text" label="NIT" value={details?.nit ?? '—'} />
-          <FieldRow icon="person.crop.circle" label="Razón social" value={details?.razonSocial ?? '—'} />
-        </View>
-
-        <SectionLabel>Tipo de pedido</SectionLabel>
-        <View style={[styles.segment, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-          {ORDER_TYPES.map((type) => (
-            <Pressable
-              key={type}
-              onPress={() => setOrderType(type)}
-              style={[styles.segmentButton, orderType === type ? { backgroundColor: theme.accent } : null]}>
-              <ThemedText
-                type="smallBold"
-                numberOfLines={1}
-                style={[
-                  styles.segmentText,
-                  { color: orderType === type ? theme.onAccent : theme.textSecondary },
-                ]}>
-                {type}
+              {/* Spelled out underneath whichever way it was picked: "Hoy" is convenient but a
+                  weekday and a number is what gets repeated back to the client. */}
+              <ThemedText type="smallBold" numberOfLines={1} style={styles.deliveryReadback}>
+                {deliveryDateLabel(deliveryDate)}
               </ThemedText>
-            </Pressable>
-          ))}
-        </View>
+            </View>
 
-        <SectionLabel>Punto de entrega</SectionLabel>
-        {/* One row that opens a searchable sheet: a client can have many points, and
-            listing them here would push the rest of the form off screen. */}
-        <Pressable
-          onPress={() => setPointSheetVisible(true)}
-          style={[styles.selectRow, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-          <Icon name="mappin" size={15} color={theme.accent} />
-          <View style={styles.optionTexts}>
-            {selectedPoint ? (
-              <>
-                <ThemedText type="smallBold" numberOfLines={1} style={styles.optionLabel}>
-                  {deliveryPointLabel(selectedPoint)}
-                </ThemedText>
-                <ThemedText themeColor="textSecondary" style={styles.metaLabel} numberOfLines={1}>
-                  {selectedPoint.address}
-                </ThemedText>
-              </>
-            ) : (
-              <ThemedText themeColor="textSecondary" style={styles.optionLabel}>
-                Elegir punto de entrega
+            <View style={[styles.deliveryDivider, { borderTopColor: theme.border }]} />
+
+            {/* One row, one sheet. Inside it the usual windows are a chip each and anything else is
+                drawn on a timeline, so the row below can be any pair of hours — it always reads back
+                as a name and a duration all the same. The caption spells out whose hours these are —
+                as two bare "Desde"/"Hasta" chip rows it never said. */}
+            <View style={styles.deliveryField}>
+              <ThemedText themeColor="textSecondary" style={styles.fieldCaption}>
+                ¿En qué horario recibe el cliente?
               </ThemedText>
-            )}
-          </View>
-          <ThemedText themeColor="textSecondary" style={styles.metaLabel}>
-            {details?.deliveryPoints.length ?? 0}
-          </ThemedText>
-          <Icon name="chevron.down" size={13} color={theme.textSecondary} />
-        </Pressable>
-
-        <SectionLabel>Persona de contacto</SectionLabel>
-        <TextInput
-          value={contactValue}
-          onChangeText={setContact}
-          placeholder="Nombre de quien recibe"
-          placeholderTextColor={theme.textSecondary}
-          style={[
-            styles.input,
-            { color: theme.text, borderColor: theme.border, backgroundColor: theme.backgroundElement },
-          ]}
-        />
-
-        <SectionLabel>Observaciones</SectionLabel>
-        <TextInput
-          value={notes}
-          onChangeText={setNotes}
-          placeholder="Instrucciones para la entrega (opcional)"
-          placeholderTextColor={theme.textSecondary}
-          multiline
-          style={[
-            styles.input,
-            styles.notesInput,
-            { color: theme.text, borderColor: theme.border, backgroundColor: theme.backgroundElement },
-          ]}
-        />
-
-        <SectionLabel>Entrega</SectionLabel>
-        <View style={[styles.card, styles.deliveryCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-          {/* The next three days are one tap, because they are almost every order; anything
-              further out goes through the calendar. Both feed the same value, so the chip row
-              stays highlighted when the calendar happens to land on one of those days. */}
-          <View style={styles.deliveryField}>
-            <ThemedText themeColor="textSecondary" style={styles.fieldCaption}>
-              ¿Qué día se entrega?
-            </ThemedText>
-            {/* Quick days on the left, calendar on the right — the same shape the tasks form
-                uses for an expiry date, so the way to reach a calendar is one thing the seller
-                learns once. */}
-            <View style={styles.dateRow}>
-              <View style={styles.dateChoices}>
-                {dateOptions.map((option) => {
-                  const active = option.key === deliveryDate;
-                  return (
-                    <Pressable
-                      key={option.key}
-                      onPress={() => setDeliveryDate(option.key)}
-                      style={[
-                        styles.dateChip,
-                        {
-                          backgroundColor: active ? theme.accent : theme.background,
-                          borderColor: active ? theme.accent : theme.border,
-                        },
-                      ]}>
-                      <ThemedText
-                        type="smallBold"
-                        numberOfLines={1}
-                        style={[styles.dateChipText, { color: active ? theme.onAccent : theme.text }]}>
-                        {option.label}
-                      </ThemedText>
-                    </Pressable>
-                  );
-                })}
-              </View>
-
               <Pressable
-                onPress={() => setDateSheetVisible(true)}
-                style={[
-                  styles.dateButton,
-                  {
-                    backgroundColor: customDate ? theme.accentSoft : theme.background,
-                    borderColor: customDate ? theme.accent : theme.border,
-                  },
-                ]}>
-                <Icon name="calendar" size={17} color={theme.accent} />
+                onPress={() => setWindowSheetVisible(true)}
+                style={[styles.selectRow, { backgroundColor: theme.background, borderColor: theme.border }]}>
+                <Icon name="clock.fill" size={15} color={theme.accent} />
+                <View style={styles.optionTexts}>
+                  <ThemedText type="smallBold" numberOfLines={1} style={styles.optionLabel}>
+                    {fromHour} a {toHour}
+                  </ThemedText>
+                  <ThemedText themeColor="textSecondary" numberOfLines={1} style={styles.metaLabel}>
+                    {windowSummary}
+                  </ThemedText>
+                </View>
+                <Icon name="chevron.down" size={13} color={theme.textSecondary} />
               </Pressable>
             </View>
-            {/* Spelled out underneath whichever way it was picked: "Hoy" is convenient but a
-                weekday and a number is what gets repeated back to the client. */}
-            <ThemedText type="smallBold" numberOfLines={1} style={styles.deliveryReadback}>
-              {deliveryDateLabel(deliveryDate)}
-            </ThemedText>
           </View>
+          </>
+        )}
+      </ScrollView>
 
-          <View style={[styles.deliveryDivider, { borderTopColor: theme.border }]} />
-
-          {/* One row, one sheet. Inside it the usual windows are a chip each and anything else is
-              drawn on a timeline, so the row below can be any pair of hours — it always reads back
-              as a name and a duration all the same. The caption spells out whose hours these are —
-              as two bare "Desde"/"Hasta" chip rows it never said. */}
-          <View style={styles.deliveryField}>
-            <ThemedText themeColor="textSecondary" style={styles.fieldCaption}>
-              ¿En qué horario recibe el cliente?
-            </ThemedText>
-            <Pressable
-              onPress={() => setWindowSheetVisible(true)}
-              style={[styles.selectRow, { backgroundColor: theme.background, borderColor: theme.border }]}>
-              <Icon name="clock.fill" size={15} color={theme.accent} />
-              <View style={styles.optionTexts}>
-                <ThemedText type="smallBold" numberOfLines={1} style={styles.optionLabel}>
-                  {fromHour} a {toHour}
-                </ThemedText>
-                <ThemedText themeColor="textSecondary" numberOfLines={1} style={styles.metaLabel}>
-                  {windowSummary}
-                </ThemedText>
-              </View>
-              <Icon name="chevron.down" size={13} color={theme.textSecondary} />
-            </Pressable>
-          </View>
-        </View>
-
+      {/* Pinned rather than left at the end of the second half, and not merely for reach: the
+          button carries the total, so parking it inside one tab would hide the amount for as
+          long as the seller was reading the other one. Out here it is the one thing on screen
+          that holds for the whole order whichever half is showing — which is also why the
+          offline notice sits beside it and not in the form: it explains the button, not the
+          fields. */}
+      <View
+        style={[
+          styles.footer,
+          {
+            backgroundColor: theme.background,
+            borderTopColor: theme.border,
+            paddingBottom: insets.bottom + Spacing.two,
+          },
+        ]}>
         {offline ? (
           <View style={[styles.notice, { backgroundColor: theme.accentAltSoft }]}>
             <Icon name="wifi.slash" size={14} color={theme.accentAlt} />
@@ -543,19 +594,45 @@ export default function OrderConfirmScreen() {
           </View>
         ) : null}
 
-        <Pressable
-          disabled={confirmDisabled}
-          onPress={confirm}
-          style={[
-            styles.confirmButton,
-            { backgroundColor: theme.success, opacity: confirmDisabled ? 0.4 : 1 },
-          ]}>
-          <Icon name={editing ? 'checkmark' : 'cart'} size={16} color={theme.onSuccess} />
-          <ThemedText type="smallBold" style={{ color: theme.onSuccess }}>
-            {editing ? 'Guardar cambios' : 'Confirmar pedido'} · {formatBs(finalTotal)}
-          </ThemedText>
-        </Pressable>
-      </ScrollView>
+        {/**
+          * The primary action belongs to the half being read, and confirming is only offered from
+          * the second one.
+          *
+          * Every delivery term has a default — today, 08:00 a 12:00, the client's first point —
+          * so the order is technically complete the moment this screen opens, and a confirm
+          * button on the products half would let it be sent without those defaults ever having
+          * been on screen. The old single column made that impossible by accident: the button sat
+          * under the delivery form, so reaching it meant scrolling past it. Splitting the screen
+          * removed that accident, and this puts the guarantee back deliberately.
+          *
+          * It is still not a lock. The tabs stay live, so the seller can jump straight to the
+          * second half and confirm from there — what they cannot do is confirm having never
+          * looked at it.
+          */}
+        {tab === 'items' ? (
+          <Pressable
+            onPress={() => showTab('details')}
+            style={[styles.confirmButton, { backgroundColor: theme.accent }]}>
+            <ThemedText type="smallBold" style={{ color: theme.onAccent }}>
+              Continuar · {formatBs(finalTotal)}
+            </ThemedText>
+            <Icon name="chevron.right" size={16} color={theme.onAccent} />
+          </Pressable>
+        ) : (
+          <Pressable
+            disabled={confirmDisabled}
+            onPress={confirm}
+            style={[
+              styles.confirmButton,
+              { backgroundColor: theme.success, opacity: confirmDisabled ? 0.4 : 1 },
+            ]}>
+            <Icon name={editing ? 'checkmark' : 'cart'} size={16} color={theme.onSuccess} />
+            <ThemedText type="smallBold" style={{ color: theme.onSuccess }}>
+              {editing ? 'Guardar cambios' : 'Confirmar pedido'} · {formatBs(finalTotal)}
+            </ThemedText>
+          </Pressable>
+        )}
+      </View>
 
       <DeliveryPointSheet
         visible={pointSheetVisible}
@@ -597,6 +674,76 @@ export default function OrderConfirmScreen() {
           qtyLabel={`${giftBonification.qty} ${giftBonification.minUnitLabel}`}
         />
       ) : null}
+    </View>
+  );
+}
+
+/** The two halves of this form. */
+type ConfirmTab = 'items' | 'details';
+
+const CONFIRM_TABS: readonly { key: ConfirmTab; label: string }[] = [
+  { key: 'items', label: 'Productos' },
+  { key: 'details', label: 'Entrega' },
+];
+
+/**
+ * The switch between what the client is buying and how it reaches them.
+ *
+ * This screen asks two unrelated questions — "is this the order?" and "when and where does it go?"
+ * — and used to stack both into one column. Checking a line against what the client just said
+ * meant scrolling up past the whole delivery form, and filling the delivery form meant scrolling
+ * past every product to get to it. Splitting them costs one tap and returns a screen where
+ * whichever question is being asked is the only thing on it.
+ *
+ * Tabs and not steps, which is why there is no "Continuar" button anywhere: the seller reads an
+ * order back in whatever order the client asks about it, jumping to a product when the price is
+ * questioned and back to the hours when the delivery is. A step that had to be finished before
+ * the next one unlocked would be modelling a sequence the conversation does not have.
+ *
+ * Deliberately not the same shape as the "Tipo de pedido" control that lives inside the second
+ * half: that one is a filled segment, this one is a soft-backed tile row. Two identical-looking
+ * segmented controls on one screen, one of them navigation and the other a field, would be a
+ * coin toss every time.
+ */
+function ConfirmTabs({
+  active,
+  itemCount,
+  onChange,
+}: {
+  active: ConfirmTab;
+  itemCount: number;
+  onChange: (tab: ConfirmTab) => void;
+}) {
+  const theme = useTheme();
+
+  return (
+    <View style={[styles.tabRow, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+      {CONFIRM_TABS.map((entry) => {
+        const isActive = entry.key === active;
+        return (
+          <Pressable
+            key={entry.key}
+            onPress={() => onChange(entry.key)}
+            style={[styles.tab, isActive ? { backgroundColor: theme.accentSoft } : null]}>
+            <ThemedText
+              type="smallBold"
+              numberOfLines={1}
+              style={[styles.tabLabel, { color: isActive ? theme.accent : theme.textSecondary }]}>
+              {entry.label}
+            </ThemedText>
+            {/* Keeps its colour whichever half is showing, the same way the catalog's tiles carry
+                theirs: how many lines the order has is a fact about the order, not about the
+                selection. */}
+            {entry.key === 'items' ? (
+              <View style={[styles.tabBadge, { backgroundColor: theme.accent }]}>
+                <ThemedText numberOfLines={1} style={[styles.tabBadgeText, { color: theme.onAccent }]}>
+                  {itemCount}
+                </ThemedText>
+              </View>
+            ) : null}
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
@@ -738,6 +885,59 @@ const styles = StyleSheet.create({
   pinned: {
     paddingHorizontal: Spacing.three,
     paddingTop: Spacing.two,
+    gap: 6,
+  },
+  /** Explicit, because the footer below is a sibling: without it the scroll view takes its full
+      content height and pushes the confirm button off the bottom of the screen. */
+  scroll: {
+    flex: 1,
+  },
+  /** The tile row the catalog uses for its categories, in the one place it also reads as
+      navigation. Same measurements on purpose — a control the seller already knows. */
+  tabRow: {
+    flexDirection: 'row',
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    padding: 3,
+    gap: 3,
+  },
+  tab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    height: ControlHeight.segment,
+    borderRadius: Radius.sm,
+    paddingHorizontal: Spacing.one,
+  },
+  tabLabel: {
+    flexShrink: 1,
+    fontSize: 12,
+  },
+  tabBadge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: Radius.pill,
+    paddingHorizontal: 4,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    // Explicit lineHeight and textAlign: without them the glyph sits off-centre in its circle,
+    // since the default line box does not match the badge height.
+    lineHeight: 18,
+    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
+  },
+  footer: {
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.two,
+    gap: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
   clientCard: {
     flexDirection: 'row',
@@ -806,17 +1006,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
+  /**
+   * Every line of an item card carries an explicit lineHeight, and that is where the card's
+   * height actually went.
+   *
+   * `ThemedText` sets a lineHeight per type and nothing else changes it, so a row that overrode
+   * only `fontSize` kept the box of the size it no longer was: the untyped rows here render at
+   * 10 and 12 points inside the default type's 24-point line, which is ten to fourteen points of
+   * empty space per row, three rows deep, on every line of the order. Naming the lineHeight beside
+   * each size is the same thing the gift block below already does.
+   */
   itemName: {
     flex: 1,
     fontSize: 12,
+    lineHeight: 16,
   },
   itemAmount: {
     fontSize: 12,
+    lineHeight: 16,
     fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  qtyText: {
-    fontSize: 10,
     fontVariant: ['tabular-nums'],
   },
   itemFooter: {
@@ -824,6 +1032,19 @@ const styles = StyleSheet.create({
     alignItems: 'baseline',
     justifyContent: 'space-between',
     gap: Spacing.two,
+  },
+  itemMeta: {
+    // Takes the row and truncates, so the discount beside it keeps its full width.
+    flex: 1,
+    fontSize: 10,
+    lineHeight: 14,
+    fontVariant: ['tabular-nums'],
+  },
+  itemDiscount: {
+    flexShrink: 0,
+    fontSize: 10,
+    lineHeight: 14,
+    fontVariant: ['tabular-nums'],
   },
   metaLabel: {
     fontSize: 10,
