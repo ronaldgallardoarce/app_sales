@@ -1,6 +1,7 @@
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
+import { PulseRing } from '@/components/ui/pulse-dot';
 import { ControlHeight, Radius, Spacing, ThemeColor } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { CatalogTabKey } from '@/types/catalog';
@@ -48,12 +49,20 @@ export function CategoryTiles({
               {tile.label}
             </ThemedText>
             {/* The badge keeps its tile's color whether or not the tab is selected:
-                the count is information about the list, not about the selection. */}
+                the count is information about the list, not about the selection.
+
+                And it pings while the seller is somewhere else: these two lists are what the
+                company wants pushed, and a static count on an unselected tab was easy to walk
+                past. The ring stops on the selected tab — once the list is open the count has
+                been read, and a badge still pulsing under the seller's eyes is just noise. */}
             {tile.count !== undefined ? (
-              <View style={[styles.badge, { backgroundColor: color }]}>
-                <ThemedText numberOfLines={1} style={[styles.badgeText, { color: theme.onAccent }]}>
-                  {tile.count}
-                </ThemedText>
+              <View style={styles.badgeWrap}>
+                <PulseRing color={color} scale={1.9} live={tile.count > 0 && !active} />
+                <View style={[styles.badge, { backgroundColor: color }]}>
+                  <ThemedText numberOfLines={1} style={[styles.badgeText, { color: theme.onAccent }]}>
+                    {tile.count}
+                  </ThemedText>
+                </View>
               </View>
             ) : null}
           </Pressable>
@@ -80,6 +89,11 @@ const styles = StyleSheet.create({
     height: ControlHeight.segment,
     borderRadius: Radius.sm,
     paddingHorizontal: Spacing.one,
+  },
+  // Wraps the badge so the ring has the badge's exact box to grow out of. No `overflow: hidden`
+  // here or on the tile above it — the ring is drawn outside both.
+  badgeWrap: {
+    flexShrink: 0,
   },
   badge: {
     minWidth: 18,

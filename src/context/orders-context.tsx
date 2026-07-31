@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 
-import { mockOrders, type PlacedOrder } from '@/data/mock-orders';
+import { mockOrders, type CancelReason, type PlacedOrder } from '@/data/mock-orders';
 
 interface OrdersContextValue {
   orders: PlacedOrder[];
@@ -8,7 +8,15 @@ interface OrdersContextValue {
   addOrder: (order: PlacedOrder) => void;
   /** Replace a placed order in place, keyed by its number. */
   updateOrder: (order: PlacedOrder) => void;
-  removeOrder: (id: number) => void;
+  /**
+   * Withdraw an order, recording why.
+   *
+   * It stays in the list, marked `anulado`: the office was already told about this order, so the
+   * seller's cancellation is another fact about it and not the absence of one. A row that simply
+   * vanished would leave the client's history with a gap where a conversation happened, and the
+   * reason with nowhere to live.
+   */
+  annulOrder: (id: number, reason: CancelReason) => void;
   find: (id: string | number | undefined) => PlacedOrder | null;
   /** The number the next order takes. */
   nextOrderId: number;
@@ -45,8 +53,16 @@ export function OrdersProvider({ children }: { children: ReactNode }) {
     setOrders((prev) => prev.map((candidate) => (candidate.id === order.id ? order : candidate)));
   }, []);
 
-  const removeOrder = useCallback((id: number) => {
-    setOrders((prev) => prev.filter((candidate) => candidate.id !== id));
+  const annulOrder = useCallback((id: number, reason: CancelReason) => {
+    setOrders((prev) =>
+      prev.map((candidate) =>
+        candidate.id === id
+          ? // Back to unsent, the same way an edit is: what the server holds is no longer what
+            // the seller and the client agreed.
+            { ...candidate, status: 'anulado', cancelReason: reason, synced: false }
+          : candidate,
+      ),
+    );
   }, []);
 
   /**
@@ -73,8 +89,8 @@ export function OrdersProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(
-    () => ({ orders, addOrder, updateOrder, removeOrder, find, nextOrderId }),
-    [orders, addOrder, updateOrder, removeOrder, find, nextOrderId],
+    () => ({ orders, addOrder, updateOrder, annulOrder, find, nextOrderId }),
+    [orders, addOrder, updateOrder, annulOrder, find, nextOrderId],
   );
 
   return <OrdersContext.Provider value={value}>{children}</OrdersContext.Provider>;

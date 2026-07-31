@@ -72,7 +72,7 @@ export default function ClientDetailScreen() {
     useClientVisits();
   const { orders, find: findOrder } = useOrders();
   const { showSummary } = useOrderSummary();
-  const { startEdit, confirmDelete } = useOrderActions();
+  const { startEdit, annulOrder } = useOrderActions();
   const [visitStep, setVisitStep] = useState<VisitStep>('none');
   /** Which of today's orders is open in the detail sheet, by number. */
   const [openOrderId, setOpenOrderId] = useState<number | null>(null);
@@ -817,7 +817,7 @@ export default function ClientDetailScreen() {
         onEdit={() =>
           openOrder && startEdit(openOrder, () => setOpenOrderId(null), `/client/${client.id}`)
         }
-        onDelete={() => openOrder && confirmDelete(openOrder, () => setOpenOrderId(null))}
+        onAnnul={(reason) => openOrder && annulOrder(openOrder, reason, () => setOpenOrderId(null))}
         // Snapshots the order into the summary screen before closing: the summary is a document
         // being read aloud, and it should survive the list changing underneath it.
         onShowSummary={() => {

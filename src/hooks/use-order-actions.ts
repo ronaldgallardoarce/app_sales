@@ -4,15 +4,16 @@ import { useCallback } from 'react';
 import { useDialog } from '@/components/ui/dialog';
 import { useCart } from '@/context/cart-context';
 import { useOrders } from '@/context/orders-context';
-import { orderNumberLabel, type PlacedOrder } from '@/data/mock-orders';
+import { orderNumberLabel, type CancelReason, type PlacedOrder } from '@/data/mock-orders';
 
 /**
  * What can be done to a placed order, from wherever it is being read.
  *
  * A hook and not two copies of these handlers because the order detail sheet is opened from more
  * than one screen — the orders list and the client — and amending an order has to mean the same
- * thing in both: the same cart bucket, the same route, the same warning before a delete. The
- * screens differ only in what they do afterwards, which is what the callbacks are for.
+ * thing in both: the same cart bucket, the same route, the same record left behind by an
+ * annulment. The screens differ only in what they do afterwards, which is what the callbacks are
+ * for.
  *
  * Neither action asks for a visit, and neither starts one. Editing an order is office work — the
  * office calls about a number, the seller fixes it from wherever they are standing — so tying it
@@ -23,7 +24,7 @@ export function useOrderActions() {
   const router = useRouter();
   const dialog = useDialog();
   const { beginEdit } = useCart();
-  const { removeOrder } = useOrders();
+  const { annulOrder: annul } = useOrders();
 
   /**
    * Reopens the order in the catalog with its lines loaded, carrying its number along so the
@@ -59,29 +60,31 @@ export function useOrderActions() {
     [beginEdit, router],
   );
 
-  const confirmDelete = useCallback(
-    (order: PlacedOrder, onDeleted?: () => void) => {
+  /**
+   * Withdraws the order, on the grounds the seller picked.
+   *
+   * No confirmation dialog in front of it: the reason sheet that produced `reason` is the
+   * confirmation — it names the order, names the client, says the annulment cannot be undone, and
+   * cannot be completed by a single stray tap. A second "are you sure?" after that would be asking
+   * the seller to re-answer a question they just answered deliberately.
+   *
+   * The acknowledgement afterwards is worth keeping, though. Annulling leaves the order on the
+   * list rather than removing it, so without a word the screen barely changes and the seller is
+   * left wondering whether it took.
+   */
+  const annulOrder = useCallback(
+    (order: PlacedOrder, reason: CancelReason, onAnnulled?: () => void) => {
+      annul(order.id, reason);
+      onAnnulled?.();
       dialog.show({
-        icon: 'trash',
-        tone: 'danger',
-        title: `¿Eliminar el pedido ${orderNumberLabel(order.id)}?`,
-        message: `Se eliminará el pedido de ${order.clientName}. No se puede deshacer.`,
-        actions: [
-          { label: 'Cancelar', variant: 'outline' },
-          {
-            label: 'Eliminar',
-            variant: 'primary',
-            tone: 'danger',
-            onPress: () => {
-              removeOrder(order.id);
-              onDeleted?.();
-            },
-          },
-        ],
+        icon: 'checkmark.circle.fill',
+        tone: 'success',
+        title: `Pedido ${orderNumberLabel(order.id)} anulado`,
+        message: `Motivo: ${reason}. El pedido queda en la lista marcado como anulado.`,
       });
     },
-    [dialog, removeOrder],
+    [annul, dialog],
   );
 
-  return { startEdit, confirmDelete };
+  return { startEdit, annulOrder };
 }
