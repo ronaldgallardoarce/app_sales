@@ -24,7 +24,10 @@ export type SelectOption<T extends string> = {
 /** Where the trigger sits in the window. Captured when the menu opens. */
 type Anchor = { x: number; y: number; width: number; height: number };
 
-const ROW_HEIGHT = 38;
+// Both consumers pick short warehouse codes — "SC", "LP" — so a row sized for a sentence spent
+// its height on nothing. The trigger keeps `ControlHeight.input` so it still lines up with the
+// fields beside it; only the menu tightens.
+const ROW_HEIGHT = 32;
 /** The list's own vertical padding, which the height estimate has to include. */
 const LIST_PADDING = 8;
 const LIST_MAX_HEIGHT = 260;
@@ -240,8 +243,8 @@ const styles = StyleSheet.create({
     gap: 1,
   },
   rowLabel: {
-    fontSize: 13,
-    lineHeight: 17,
+    fontSize: 12,
+    lineHeight: 16,
   },
   rowMeta: {
     fontSize: 11,

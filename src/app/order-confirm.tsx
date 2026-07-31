@@ -17,6 +17,7 @@ import { useCart, useCartScope } from '@/context/cart-context';
 import { useClientVisits } from '@/context/client-visit-context';
 import { useConnectivity } from '@/context/connectivity-context';
 import { bonificationOf, useOrderIncentives } from '@/context/order-incentives-context';
+import { useOrderSummary } from '@/context/order-summary-context';
 import { useOrders } from '@/context/orders-context';
 import { orderNumberLabel } from '@/data/mock-orders';
 import { type LineBonification } from '@/data/mock-bonifications';
@@ -35,7 +36,7 @@ import {
   toDateKey,
   type OrderType,
 } from '@/data/mock-order-details';
-import { OrderSummarySheet, type OrderSummaryData } from '@/components/orders/order-summary-sheet';
+import { type OrderSummaryData } from '@/components/orders/order-summary-document';
 import { useContentInsets } from '@/hooks/use-content-insets';
 import { useTheme } from '@/hooks/use-theme';
 import type { CartLine, Product } from '@/types/catalog';
@@ -137,6 +138,7 @@ export default function OrderConfirmScreen() {
    * made, and a summary with no discount on it would be wrong rather than merely empty.
    */
   const { result, chooseGift, reset: resetIncentives } = useOrderIncentives();
+  const { showSummary } = useOrderSummary();
   const incentives = useMemo(
     () => result?.incentives ?? calculateIncentives(paymentMethod, totalAmount),
     [result, paymentMethod, totalAmount],
@@ -150,8 +152,6 @@ export default function OrderConfirmScreen() {
   // Confirming registers the order, so it needs a connection; the prepedido saved
   // from the catalog panel is the offline path.
   const confirmDisabled = lines.length === 0 || offline;
-
-  const [summaryVisible, setSummaryVisible] = useState(false);
 
   const goBack = () => (router.canGoBack() ? router.back() : router.replace('/map' as Href));
 
@@ -179,6 +179,7 @@ export default function OrderConfirmScreen() {
         title: editing ? `Pedido ${orderNumberLabel(editing.id)}` : 'Resumen del pedido',
         clientCode: client.code,
         clientName: client.name,
+        clientPhone: client.phone,
         meta: [
           { label: 'Entrega', value: deliveryDateLabel(deliveryDate) },
           { label: 'Horario', value: `${fromHour} a ${toHour}` },
@@ -752,7 +753,7 @@ export default function OrderConfirmScreen() {
         <View style={styles.actionRow}>
           <Pressable
             disabled={lines.length === 0}
-            onPress={() => setSummaryVisible(true)}
+            onPress={() => summaryData && showSummary(summaryData)}
             style={[
               styles.summaryButton,
               {
@@ -790,12 +791,6 @@ export default function OrderConfirmScreen() {
           )}
         </View>
       </View>
-
-      <OrderSummarySheet
-        data={summaryData}
-        visible={summaryVisible}
-        onClose={() => setSummaryVisible(false)}
-      />
 
       <DeliveryPointSheet
         visible={pointSheetVisible}

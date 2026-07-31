@@ -68,6 +68,8 @@ const GLYPHS = {
   calendar: 'calendar-outline',
   'exclamationmark.circle': 'alert-circle-outline',
   photo: 'image-outline',
+  'doc.pdf': 'file-pdf-box',
+  share: 'share-variant',
   'folder.fill': 'folder-image',
   'door.exit': 'exit-run',
 } as const;

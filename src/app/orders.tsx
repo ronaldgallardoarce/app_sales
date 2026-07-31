@@ -6,15 +6,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ActiveVisitBar } from '@/components/client/active-visit-bar';
 import { OrderCard } from '@/components/orders/order-card';
 import { OrderDetailSheet } from '@/components/orders/order-detail-sheet';
-import { OrderSummarySheet, summaryFromOrder } from '@/components/orders/order-summary-sheet';
+import { summaryFromOrder } from '@/components/orders/order-summary-document';
 import { ThemedText } from '@/components/themed-text';
 import { DatePickerDialog } from '@/components/ui/date-picker';
 import { Icon } from '@/components/ui/icon';
 import { OfflineBadge } from '@/components/ui/offline-badge';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
+import { useOrderSummary } from '@/context/order-summary-context';
 import { useOrders } from '@/context/orders-context';
 import { fromDateKey, toDateKey } from '@/data/mock-order-details';
-import type { PlacedOrder } from '@/data/mock-orders';
 import { useContentInsets } from '@/hooks/use-content-insets';
 import { useOrderActions } from '@/hooks/use-order-actions';
 import { useTheme } from '@/hooks/use-theme';
@@ -51,10 +51,8 @@ export default function OrdersScreen() {
   /** Which end of the custom range the calendar is open for. */
   const [editingEnd, setEditingEnd] = useState<'from' | 'to' | null>(null);
   const [openOrderId, setOpenOrderId] = useState<number | null>(null);
-  /** The order whose shareable summary is open. Held by value, not by id: the summary is a
-      snapshot being read aloud, and it should survive the list changing underneath it. */
-  const [summaryOrder, setSummaryOrder] = useState<PlacedOrder | null>(null);
   const { orders: allOrders } = useOrders();
+  const { showSummary } = useOrderSummary();
   // Shared with the client screen, which opens the same sheet on the same orders.
   const { startEdit, confirmDelete } = useOrderActions();
 
@@ -228,18 +226,13 @@ export default function OrdersScreen() {
         onEdit={() => openOrder && startEdit(openOrder, () => setOpenOrderId(null))}
         // Closes the sheet as well: it was showing the order that just stopped existing.
         onDelete={() => openOrder && confirmDelete(openOrder, () => setOpenOrderId(null))}
-        // Hands the order over before closing, so the summary keeps something to show once the
-        // sheet that opened it is gone.
+        // Snapshots the order into the summary screen before closing: the summary is a document
+        // being read aloud, and it should survive the list changing underneath it.
         onShowSummary={() => {
-          setSummaryOrder(openOrder);
+          if (!openOrder) return;
+          showSummary(summaryFromOrder(openOrder));
           setOpenOrderId(null);
         }}
-      />
-
-      <OrderSummarySheet
-        data={summaryOrder ? summaryFromOrder(summaryOrder) : null}
-        visible={summaryOrder !== null}
-        onClose={() => setSummaryOrder(null)}
       />
     </View>
   );
