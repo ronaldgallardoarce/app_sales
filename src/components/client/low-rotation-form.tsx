@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Keyboard, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
-import { DatePickerDialog } from '@/components/ui/date-picker';
+import {
+  DateInputField,
+  isDateInputComplete,
+  isDateInputValid,
+} from '@/components/ui/date-input-field';
 import { Icon } from '@/components/ui/icon';
 import { PhotoPicker } from '@/components/ui/photo-picker';
 import { Select } from '@/components/ui/select';
@@ -15,7 +19,13 @@ import { useTheme } from '@/hooks/use-theme';
 const MAX_PHOTOS = 3;
 
 /** Characters in a complete `DD/MM/AAAA` value. */
-const EXPIRY_LENGTH = 10;
+/**
+ * Re-exported under the names the tasks screen already imports. The implementation moved to
+ * `DateInputField` when the returns flow needed the same masked date — one copy of the
+ * `31/02` rollover check, not two that can drift apart.
+ */
+export const isExpiryComplete = isDateInputComplete;
+export const isExpiryValid = isDateInputValid;
 
 /**
  * What the seller records for a slow-moving product found at the client. The shape
@@ -33,49 +43,6 @@ export type LowRotationValue = {
 
 export function emptyLowRotation(): LowRotationValue {
   return { productId: null, expiry: '', lot: null, qty: 0 };
-}
-
-/**
- * Whether the masked field holds a full date, regardless of it being a valid one. Only
- * for deciding when to start judging the input — a half-typed date is not yet wrong.
- */
-export function isExpiryComplete(expiry: string): boolean {
-  return expiry.length === EXPIRY_LENGTH;
-}
-
-/**
- * Whether the field holds a usable expiry. This, not `isExpiryComplete`, is what gates
- * completing the task: a full-length value can still be a date that does not exist, and
- * a record carrying `31/02/2027` is worse than an empty one because it looks answered.
- */
-export function isExpiryValid(expiry: string): boolean {
-  return isExpiryComplete(expiry) && isRealDate(expiry);
-}
-
-/**
- * Keeps only digits and re-inserts the separators, so the seller types eight numbers
- * and never a slash. Anything past the eighth digit is dropped instead of shifting
- * the earlier groups.
- */
-function maskExpiry(input: string): string {
-  const digits = input.replace(/[^0-9]/g, '').slice(0, 8);
-  return [digits.slice(0, 2), digits.slice(2, 4), digits.slice(4, 8)]
-    .filter((part) => part.length > 0)
-    .join('/');
-}
-
-/**
- * Whether a complete `DD/MM/AAAA` value is a date that exists. This is the reason the
- * field stays a string: `new Date(2027, 1, 31)` does not fail, it silently rolls over
- * to 3 March, so a `Date` would have accepted `31/02/2027` and quietly recorded the
- * wrong expiry. Comparing the parts back against what the date produced is what
- * catches it.
- */
-function isRealDate(expiry: string): boolean {
-  const [day, month, year] = expiry.split('/').map(Number);
-  if (!day || !month || !year) return false;
-  const date = new Date(year, month - 1, day);
-  return date.getDate() === day && date.getMonth() === month - 1 && date.getFullYear() === year;
 }
 
 /**
@@ -108,7 +75,11 @@ export function LowRotationForm({
       <ProductSelectRow productId={value.productId} onPress={onOpenProductPicker} />
 
       <SectionLabel>Fecha de vencimiento</SectionLabel>
-      <ExpiryField expiry={value.expiry} onChange={(expiry) => onChange({ expiry })} />
+      <DateInputField
+        value={value.expiry}
+        onChange={(expiry) => onChange({ expiry })}
+        title="Fecha de vencimiento"
+      />
 
       <SectionLabel>Lote</SectionLabel>
       <LotSelect lot={value.lot} onSelect={(lot) => onChange({ lot })} />
@@ -295,101 +266,6 @@ export function ProductPickerView({
 }
 
 /* ------------------------------------------------------------------ */
-/* Expiry — masked DD/MM/AAAA input plus a calendar dialog              */
-/* ------------------------------------------------------------------ */
-
-function pad2(value: number): string {
-  return String(value).padStart(2, '0');
-}
-
-/** A picked day back into the masked field's own `DD/MM/AAAA` shape. */
-function formatExpiry(date: Date): string {
-  return `${pad2(date.getDate())}/${pad2(date.getMonth() + 1)}/${date.getFullYear()}`;
-}
-
-/**
- * The typed value as a `Date`, or null while it is incomplete or impossible. Built on
- * `isExpiryValid` so the calendar can never highlight a day the field itself rejects.
- */
-function parseExpiry(expiry: string): Date | null {
-  if (!isExpiryValid(expiry)) return null;
-  const [day, month, year] = expiry.split('/').map(Number);
-  return new Date(year, month - 1, day);
-}
-
-function ExpiryField({ expiry, onChange }: { expiry: string; onChange: (expiry: string) => void }) {
-  const theme = useTheme();
-  // Only complain once the seller finished typing: "31/0" is on its way to a valid
-  // date, so warning mid-entry would flag every keystroke.
-  const invalid = isExpiryComplete(expiry) && !isRealDate(expiry);
-  const selected = parseExpiry(expiry);
-  const [calendarOpen, setCalendarOpen] = useState(false);
-
-  return (
-    <View style={styles.pickerGroup}>
-      {/* Typing stays the primary path — eight digits read off the package beat paging a
-          calendar — so the button beside the field is a second way in, not a replacement. */}
-      <View style={styles.fieldRow}>
-        <TextInput
-          value={expiry}
-          onChangeText={(input) => onChange(maskExpiry(input))}
-          placeholder="DD/MM/AAAA"
-          placeholderTextColor={theme.textSecondary}
-          keyboardType="number-pad"
-          maxLength={EXPIRY_LENGTH}
-          style={[
-            styles.expiryInput,
-            styles.fieldInput,
-            {
-              backgroundColor: theme.background,
-              borderColor: invalid ? theme.danger : theme.border,
-              color: theme.text,
-            },
-          ]}
-        />
-
-        <Pressable
-          onPress={() => {
-            // The keyboard would otherwise stay up over the dialog, and on a short screen
-            // it covers the very rows the seller came here to tap.
-            Keyboard.dismiss();
-            setCalendarOpen(true);
-          }}
-          style={[
-            styles.fieldButton,
-            {
-              backgroundColor: calendarOpen ? theme.accentSoft : theme.background,
-              borderColor: calendarOpen ? theme.accent : theme.border,
-            },
-          ]}>
-          <Icon name="calendar" size={17} color={theme.accent} />
-        </Pressable>
-      </View>
-
-      <DatePickerDialog
-        visible={calendarOpen}
-        value={selected}
-        title="Fecha de vencimiento"
-        onSelect={(date) => {
-          onChange(formatExpiry(date));
-          setCalendarOpen(false);
-        }}
-        onClose={() => setCalendarOpen(false)}
-      />
-
-      {invalid ? (
-        <View style={[styles.notice, { backgroundColor: theme.dangerSoft }]}>
-          <Icon name="exclamationmark.circle" size={13} color={theme.danger} />
-          <ThemedText style={[styles.noticeText, { color: theme.danger }]}>
-            Esa fecha no existe en el calendario. Revisá el día y el mes.
-          </ThemedText>
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /* Lot — select, options in a menu over the form                       */
 /* ------------------------------------------------------------------ */
 
@@ -499,9 +375,6 @@ const styles = StyleSheet.create({
     marginBottom: -Spacing.one,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-  },
-  pickerGroup: {
-    gap: 6,
   },
   picker: {
     gap: Spacing.two,
@@ -618,49 +491,6 @@ const styles = StyleSheet.create({
     // times taller than the text inside it.
     lineHeight: 13,
     fontWeight: '700',
-  },
-  expiryInput: {
-    height: ControlHeight.input,
-    paddingHorizontal: Spacing.two,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    // 13 is the form's size for every other field. Bold and tabular-nums stay — the value
-    // is eight digits read back at a glance — but the earlier 15pt with letterSpacing 1
-    // made this one field shout next to the product row and the quantity beside it.
-    fontSize: 13,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-    letterSpacing: 0.5,
-  },
-  notice: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
-    paddingHorizontal: Spacing.two,
-    paddingVertical: 6,
-    borderRadius: Radius.sm,
-  },
-  noticeText: {
-    flex: 1,
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: '600',
-  },
-  fieldRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.one,
-  },
-  fieldInput: {
-    flex: 1,
-  },
-  fieldButton: {
-    width: ControlHeight.input,
-    height: ControlHeight.input,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   stepper: {
     flexDirection: 'row',

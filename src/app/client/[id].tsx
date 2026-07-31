@@ -551,7 +551,13 @@ export default function ClientDetailScreen() {
             {/* Secondary visit actions */}
             <SectionLabel>Durante la visita</SectionLabel>
             <View style={styles.optionsRow}>
-              <OptionButton icon="shippingbox.slash" label="Devolución" color="accentAlt" soft="accentAltSoft" onPress={soon} />
+              <OptionButton
+                icon="shippingbox.slash"
+                label="Devolución"
+                color="accentAlt"
+                soft="accentAltSoft"
+                onPress={() => router.push({ pathname: '/client/returns', params: { id: client.id } } as Href)}
+              />
               <OptionButton
                 icon="list.bullet"
                 label="Tareas"
