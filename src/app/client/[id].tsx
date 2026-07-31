@@ -8,7 +8,7 @@ import { ordersPlacedToday } from '@/components/client/today-orders';
 import { VisitTimer } from '@/components/client/visit-timer';
 import { MiniMap } from '@/components/map/mini-map';
 import { OrderDetailSheet } from '@/components/orders/order-detail-sheet';
-import { OrderSummarySheet, summaryFromOrder } from '@/components/orders/order-summary-sheet';
+import { summaryFromOrder } from '@/components/orders/order-summary-document';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { useDialog } from '@/components/ui/dialog';
@@ -17,9 +17,9 @@ import { OfflineBadge } from '@/components/ui/offline-badge';
 import { PhotoPicker } from '@/components/ui/photo-picker';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { CHANNEL_META, CLIENT_STATE_META, EXIT_REASONS, REMOTE_REASONS, STATUS_META } from '@/data/mock-clients';
-import type { PlacedOrder } from '@/data/mock-orders';
 import { mockSeller } from '@/data/mock-user';
 import { useClientVisits } from '@/context/client-visit-context';
+import { useOrderSummary } from '@/context/order-summary-context';
 import { useOrders } from '@/context/orders-context';
 import { useContentInsets } from '@/hooks/use-content-insets';
 import { useHardwareBack } from '@/hooks/use-hardware-back';
@@ -71,12 +71,11 @@ export default function ClientDetailScreen() {
   const { clients, visitsOf, openVisitOf, markEntry, markVisitDone, markExceptionalExit } =
     useClientVisits();
   const { orders, find: findOrder } = useOrders();
+  const { showSummary } = useOrderSummary();
   const { startEdit, confirmDelete } = useOrderActions();
   const [visitStep, setVisitStep] = useState<VisitStep>('none');
   /** Which of today's orders is open in the detail sheet, by number. */
   const [openOrderId, setOpenOrderId] = useState<number | null>(null);
-  /** The order whose shareable summary is open — held by value, as a snapshot being read aloud. */
-  const [summaryOrder, setSummaryOrder] = useState<PlacedOrder | null>(null);
   const [exitVisible, setExitVisible] = useState(false);
   const [exitReason, setExitReason] = useState<string | null>(null);
   const [exitPhotos, setExitPhotos] = useState<string[]>([]);
@@ -813,18 +812,13 @@ export default function ClientDetailScreen() {
           openOrder && startEdit(openOrder, () => setOpenOrderId(null), `/client/${client.id}`)
         }
         onDelete={() => openOrder && confirmDelete(openOrder, () => setOpenOrderId(null))}
-        // Hands the order over before closing, so the summary keeps something to show once the
-        // sheet that opened it is gone.
+        // Snapshots the order into the summary screen before closing: the summary is a document
+        // being read aloud, and it should survive the list changing underneath it.
         onShowSummary={() => {
-          setSummaryOrder(openOrder);
+          if (!openOrder) return;
+          showSummary(summaryFromOrder(openOrder));
           setOpenOrderId(null);
         }}
-      />
-
-      <OrderSummarySheet
-        data={summaryOrder ? summaryFromOrder(summaryOrder) : null}
-        visible={summaryOrder !== null}
-        onClose={() => setSummaryOrder(null)}
       />
     </View>
   );

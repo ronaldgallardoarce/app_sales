@@ -15,6 +15,7 @@ import { CartProvider } from '@/context/cart-context';
 import { ClientVisitProvider } from '@/context/client-visit-context';
 import { ConnectivityProvider } from '@/context/connectivity-context';
 import { OrderIncentivesProvider } from '@/context/order-incentives-context';
+import { OrderSummaryProvider } from '@/context/order-summary-context';
 import { OrdersProvider } from '@/context/orders-context';
 import { ThemeSchemeProvider, useThemeSchemeContext } from '@/context/theme-scheme-context';
 import { AndroidImmersiveNavBar, Colors } from '@/constants/theme';
@@ -66,6 +67,10 @@ function RootNavigation() {
         {/* Placed orders outlive any one cart, so this sits outside the incentives reply. */}
         <OrdersProvider>
         <ClientVisitProvider>
+        {/* Above the dialog because the summary screen raises one when an export fails, and
+            below the orders it is built from. Holds nothing but the document currently being
+            shown, so its place in the tree only has to outlive a navigation. */}
+        <OrderSummaryProvider>
         <DialogProvider>
         <AnimatedSplashOverlay />
         <Stack screenOptions={{ headerShown: false }} />
@@ -103,6 +108,7 @@ function RootNavigation() {
           />
         ) : null}
         </DialogProvider>
+        </OrderSummaryProvider>
         </ClientVisitProvider>
         </OrdersProvider>
         </OrderIncentivesProvider>
