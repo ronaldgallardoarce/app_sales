@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 
+import { useCart, type CartScope } from '@/context/cart-context';
 import {
   fetchOrderIncentives,
   giftOfProduct,
@@ -10,6 +11,11 @@ import type { PaymentMethod } from '@/data/mock-incentives';
 import type { CartLine, Product } from '@/types/catalog';
 
 type RequestStatus = 'idle' | 'loading' | 'ready';
+
+/** What the service said about one order, and whether it has said it yet. */
+type Reply = { status: RequestStatus; result: OrderIncentives | null };
+
+const NO_REPLY: Reply = { status: 'idle', result: null };
 
 interface OrderIncentivesContextValue {
   status: RequestStatus;
@@ -41,51 +47,71 @@ const OrderIncentivesContext = createContext<OrderIncentivesContextValue | null>
  * the request is made, and the summary is where the reply is read and edited. Passing it
  * through navigation params was the alternative, and route params are strings — the reply is
  * a list of objects the seller then modifies.
+ *
+ * One reply per cart scope, following the cart: the discounts and free goods belong to a set of
+ * lines, so keeping the two orders' lines apart and letting them share one reply would just move
+ * the collision — an edit priced and saved would have wiped the gifts the seller had already
+ * chosen on the order they were still building.
  */
 export function OrderIncentivesProvider({ children }: { children: ReactNode }) {
-  const [status, setStatus] = useState<RequestStatus>('idle');
-  const [result, setResult] = useState<OrderIncentives | null>(null);
+  const { scope } = useCart();
+  const [replies, setReplies] = useState<Record<CartScope, Reply>>({
+    draft: NO_REPLY,
+    edit: NO_REPLY,
+  });
+
+  const { status, result } = replies[scope];
 
   const request = useCallback(
     async (lines: CartLine[], paymentMethod: PaymentMethod, subtotal: number) => {
-      setStatus('loading');
+      setReplies((prev) => ({ ...prev, [scope]: { ...prev[scope], status: 'loading' } }));
       try {
         const reply = await fetchOrderIncentives(lines, paymentMethod, subtotal);
-        setResult(reply);
-        setStatus('ready');
+        setReplies((prev) => ({ ...prev, [scope]: { status: 'ready', result: reply } }));
         return true;
       } catch {
         // Back to idle, not stuck in loading. Without this a rejected request left the status at
         // 'loading' forever, and the button that reads it stayed disabled — one failed call and
         // the cart could no longer be sent at all. The mock never rejects; the real service will.
-        setStatus('idle');
+        setReplies((prev) => ({ ...prev, [scope]: { ...prev[scope], status: 'idle' } }));
         return false;
       }
     },
-    [],
+    [scope],
   );
 
   /**
    * Replaces the gift's product identity in place. Keyed by the *ordered* line rather than by
    * the gift, because the gift's own id is the thing being changed and would stop matching.
    */
-  const chooseGift = useCallback((productId: number, product: Product) => {
-    setResult((prev) =>
-      prev === null
-        ? prev
-        : {
-            ...prev,
-            bonifications: prev.bonifications.map((bonification) =>
-              bonification.productId === productId ? giftOfProduct(bonification, product) : bonification,
-            ),
+  const chooseGift = useCallback(
+    (productId: number, product: Product) => {
+      setReplies((prev) => {
+        const current = prev[scope].result;
+        if (current === null) return prev;
+        return {
+          ...prev,
+          [scope]: {
+            ...prev[scope],
+            result: {
+              ...current,
+              bonifications: current.bonifications.map((bonification) =>
+                bonification.productId === productId
+                  ? giftOfProduct(bonification, product)
+                  : bonification,
+              ),
+            },
           },
-    );
-  }, []);
+        };
+      });
+    },
+    [scope],
+  );
 
-  const reset = useCallback(() => {
-    setResult(null);
-    setStatus('idle');
-  }, []);
+  const reset = useCallback(
+    () => setReplies((prev) => ({ ...prev, [scope]: NO_REPLY })),
+    [scope],
+  );
 
   const value = useMemo(
     () => ({ status, result, request, chooseGift, reset }),

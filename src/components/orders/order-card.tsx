@@ -5,7 +5,7 @@ import { Icon } from '@/components/ui/icon';
 import { Radius, Spacing } from '@/constants/theme';
 // ORDER_STATUS_META is imported by the detail sheet and the filter chips; the commented-out
 // status pill below is the only thing this file needed it for.
-import { type PlacedOrder } from '@/data/mock-orders';
+import { orderNumberLabel, type PlacedOrder } from '@/data/mock-orders';
 import { useTheme } from '@/hooks/use-theme';
 import { formatBs } from '@/utils/currency';
 import { shortDateLabel } from '@/utils/order-filters';
@@ -32,7 +32,7 @@ export function OrderCard({ order, onPress }: { order: PlacedOrder; onPress: () 
       style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
       <View style={styles.topRow}>
         <ThemedText type="smallBold" numberOfLines={1} style={styles.id}>
-          {order.id}
+          {orderNumberLabel(order.id)}
         </ThemedText>
         {/* Status pill hidden for now, by request — kept rather than deleted because the status
             itself still drives the detail sheet and the filter chips, so this is a display

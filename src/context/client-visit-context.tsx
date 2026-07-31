@@ -5,32 +5,84 @@ import { mapClients, type MapClient, type VisitStatus } from '@/data/mock-client
 /** Justification captured when the seller leaves without placing an order. */
 export type ExitRecord = { reason: string; photos: string[] };
 
-/** What the seller did during the current visit — drives the exit status. */
-export type VisitActivity = { entered: boolean; tasksDone: boolean; ordered: boolean };
+/** What the seller did during one visit — drives how it closed. */
+export type VisitActivity = { tasksDone: boolean; ordered: boolean };
+
+/**
+ * One on-site visit: opened by a check-in, closed by an order or an exceptional exit.
+ *
+ * A list of these per client rather than a single pair of timestamps, because a seller can come
+ * back the same day — the owner was out, a document was missing, the client called again — and the
+ * second call is a second visit, not a continuation of the first. Folding it into the first one
+ * rewrote a record the supervisor reads: a twelve-minute visit became a three-hour one because the
+ * seller walked past again after lunch.
+ */
+export type Visit = {
+  startedAt: number;
+  /** Epoch ms when it closed, or null while the seller is still inside. */
+  endedAt: number | null;
+  activity: VisitActivity;
+  /** Present only on a visit that ended without an order. */
+  exit?: ExitRecord;
+};
 
 interface ClientVisitContextValue {
   /** `mapClients` with each client's live (possibly overridden) status applied. */
   clients: MapClient[];
   statusOf: (clientId: string) => VisitStatus;
+  /** Every visit to this client today, oldest first. */
+  visitsOf: (clientId: string) => Visit[];
+  /**
+   * Every visit open right now, oldest first, each with the client it belongs to — what a screen
+   * needs when it has no client of its own to ask about. The map, the orders list and the home
+   * screen all want the same answer ("is the seller inside anyone?") and none of them knows whose
+   * id to pass to `openVisitOf`.
+   *
+   * A list and not a single visit even though one at a time is the only sane state: check-in can
+   * leave a second one open behind the seller's back, and until something can show those they are
+   * invisible and un-closable. Oldest first because that is the order they need attention in — the
+   * one that has been running longest is the one most likely to be a visit nobody is inside.
+   */
+  openVisits: { clientId: string; visit: Visit }[];
+  /** The visit the seller is inside right now, or null when they are not in one. */
+  openVisitOf: (clientId: string) => Visit | null;
+  /** The one worth showing: the open visit, or the last closed one. */
+  currentVisitOf: (clientId: string) => Visit | null;
+  /** The current visit's activity, or an empty one when the client has never been visited. */
   activityOf: (clientId: string) => VisitActivity;
   exitOf: (clientId: string) => ExitRecord | undefined;
-  /** Epoch ms when the on-site visit started, or undefined if not started. */
-  startedAtOf: (clientId: string) => number | undefined;
-  /** Epoch ms when the visit was closed (order or exceptional exit), or undefined if still open. */
-  endedAtOf: (clientId: string) => number | undefined;
-  /** Start the visit timer once (no-op if already running for this client). */
-  startVisitTimer: (clientId: string) => void;
-  /** Seller checked in on-site → client becomes "iniciado". */
+  /** Seller checked in on-site → opens a visit and the client reads "iniciado". */
   markEntry: (clientId: string) => void;
-  /** Seller completed at least one task during the visit. */
+  /** Seller completed at least one task during the open visit. */
   markTasksDone: (clientId: string) => void;
-  /** Seller placed an order → client becomes "visitado" (happy-path close). */
-  markOrder: (clientId: string) => void;
+  /**
+   * Seller placed an order → the client becomes "visitado".
+   *
+   * Leaves the visit open unless asked to close it. An order used to end the visit on its own,
+   * which meant a seller who still had a task to do had to check in all over again — and, worse,
+   * that the record put the end of the visit at the order rather than at the door: ten more
+   * minutes on site simply vanished.
+   *
+   * `closeVisit` is part of this call and not a second one because the two happen together, from
+   * one button, and a separate close would read the visit before this update had landed — finding
+   * no order on it and refusing.
+   */
+  markOrder: (clientId: string, options?: { closeVisit?: boolean }) => void;
+  /**
+   * Ordinary end of a productive visit: closes it on the strength of what it already achieved,
+   * with no reason and no photo. Refuses a visit that achieved nothing — that one is an
+   * exceptional exit and owes a justification, and enforcing it here rather than only in the
+   * screen means no future caller can route around the rule.
+   */
+  markVisitDone: (clientId: string) => void;
   /** Exceptional exit → "trabajado" if tasks were done, else "cerrado-observado". */
   markExceptionalExit: (clientId: string, record: ExitRecord) => void;
 }
 
-const EMPTY_ACTIVITY: VisitActivity = { entered: false, tasksDone: false, ordered: false };
+const EMPTY_ACTIVITY: VisitActivity = { tasksDone: false, ordered: false };
+
+/** Shared empty list, so `visitsOf` on an unvisited client returns a stable identity. */
+const NO_VISITS: Visit[] = [];
 
 /** Seed statuses from the mock data, indexed for O(1) lookup. */
 const BASE_STATUS: Record<string, VisitStatus> = Object.fromEntries(
@@ -66,62 +118,116 @@ function seededUnit(seed: string): number {
 }
 
 /**
- * Seed visit timestamps so clients that already start in a visited state show a
- * realistic timer without any in-session interaction. Computed once at module
- * load: "iniciado" clients get an open timer that keeps ticking; closed clients
- * get a fixed start/end pair.
+ * Seed one visit for the clients that already start in a visited state, so they show a realistic
+ * timer and history without any in-session interaction. Computed once at module load: "iniciado"
+ * clients get an open visit that keeps ticking, closed clients get a finished one whose activity
+ * matches the status they were seeded with.
+ *
+ * Three clients seed as "iniciado", so the app starts with three visits open at once. That is not
+ * a state a seller should be able to reach — they are inside one client at a time — but it is the
+ * state the in-visit bar exists to make visible and closable, so the seed keeps it.
  */
-function seedVisitTimestamps(): {
-  started: Record<string, number>;
-  ended: Record<string, number>;
-} {
-  const started: Record<string, number> = {};
-  const ended: Record<string, number> = {};
+function seedVisits(): Record<string, Visit[]> {
+  const seeded: Record<string, Visit[]> = {};
   const now = Date.now();
 
   mapClients.forEach((c) => {
     // Off-route clients read as "no-visitado" until touched in-session, so their
-    // seeded status carries no timer.
+    // seeded status carries no visit.
     if (!c.visitToday) return;
+
     if (c.status === 'iniciado') {
       const elapsed = (3 + Math.floor(seededUnit(`${c.id}:e`) * 37)) * MINUTE;
-      started[c.id] = now - elapsed;
-    } else if (
-      c.status === 'trabajado' ||
-      c.status === 'visitado' ||
-      c.status === 'cerrado-observado'
-    ) {
+      seeded[c.id] = [{ startedAt: now - elapsed, endedAt: null, activity: EMPTY_ACTIVITY }];
+      return;
+    }
+
+    if (c.status === 'trabajado' || c.status === 'visitado' || c.status === 'cerrado-observado') {
       const duration = (8 + Math.floor(seededUnit(`${c.id}:d`) * 40)) * MINUTE;
       const endedAgo = (10 + Math.floor(seededUnit(`${c.id}:a`) * 180)) * MINUTE;
-      ended[c.id] = now - endedAgo;
-      started[c.id] = ended[c.id] - duration;
+      const endedAt = now - endedAgo;
+      seeded[c.id] = [
+        {
+          startedAt: endedAt - duration,
+          endedAt,
+          activity: {
+            tasksDone: c.status === 'trabajado',
+            ordered: c.status === 'visitado',
+          },
+        },
+      ];
     }
   });
 
-  return { started, ended };
+  return seeded;
 }
 
-const SEED_TIMESTAMPS = seedVisitTimestamps();
+const SEED_VISITS = seedVisits();
 
 const ClientVisitContext = createContext<ClientVisitContextValue | null>(null);
 
 export function ClientVisitProvider({ children }: { children: ReactNode }) {
   const [statuses, setStatuses] = useState<Record<string, VisitStatus>>({});
-  const [activity, setActivity] = useState<Record<string, VisitActivity>>({});
-  const [exits, setExits] = useState<Record<string, ExitRecord>>({});
-  const [startedAt, setStartedAt] = useState<Record<string, number>>(SEED_TIMESTAMPS.started);
-  const [endedAt, setEndedAt] = useState<Record<string, number>>(SEED_TIMESTAMPS.ended);
+  const [visits, setVisits] = useState<Record<string, Visit[]>>(SEED_VISITS);
 
-  const startedAtOf = useCallback((clientId: string) => startedAt[clientId], [startedAt]);
+  const visitsOf = useCallback((clientId: string) => visits[clientId] ?? NO_VISITS, [visits]);
 
-  const endedAtOf = useCallback((clientId: string) => endedAt[clientId], [endedAt]);
+  const currentVisitOf = useCallback(
+    (clientId: string): Visit | null => {
+      const list = visits[clientId];
+      return list && list.length > 0 ? list[list.length - 1] : null;
+    },
+    [visits],
+  );
 
-  const markVisitEnd = useCallback((clientId: string) => {
-    setEndedAt((prev) => (prev[clientId] ? prev : { ...prev, [clientId]: Date.now() }));
-  }, []);
+  const openVisitOf = useCallback(
+    (clientId: string): Visit | null => {
+      const current = currentVisitOf(clientId);
+      return current && current.endedAt === null ? current : null;
+    },
+    [currentVisitOf],
+  );
 
-  const startVisitTimer = useCallback((clientId: string) => {
-    setStartedAt((prev) => (prev[clientId] ? prev : { ...prev, [clientId]: Date.now() }));
+  /**
+   * The open visits, whoever they belong to. Scans rather than tracking ids in state of its own,
+   * so it cannot drift out of sync with the visit list it describes — every close already writes
+   * an `endedAt` there, and a second source of truth would need every one of them to remember it.
+   */
+  const openVisits = useMemo<{ clientId: string; visit: Visit }[]>(() => {
+    const open: { clientId: string; visit: Visit }[] = [];
+    for (const clientId of Object.keys(visits)) {
+      const list = visits[clientId];
+      const last = list[list.length - 1];
+      if (last && last.endedAt === null) open.push({ clientId, visit: last });
+    }
+    return open.sort((a, b) => a.visit.startedAt - b.visit.startedAt);
+  }, [visits]);
+
+  const activityOf = useCallback(
+    (clientId: string): VisitActivity => currentVisitOf(clientId)?.activity ?? EMPTY_ACTIVITY,
+    [currentVisitOf],
+  );
+
+  const exitOf = useCallback(
+    (clientId: string): ExitRecord | undefined => currentVisitOf(clientId)?.exit,
+    [currentVisitOf],
+  );
+
+  /**
+   * Applies a change to the client's open visit, and does nothing when there is none.
+   *
+   * The no-op case is the remote order: it is placed without ever checking in, so there is no
+   * visit for it to belong to. Creating one here to have somewhere to write would invent an
+   * on-site call that never happened — the exact record the geofence exists to protect.
+   */
+  const updateOpenVisit = useCallback((clientId: string, update: (visit: Visit) => Visit) => {
+    setVisits((prev) => {
+      const list = prev[clientId];
+      if (!list || list.length === 0) return prev;
+      const last = list[list.length - 1];
+      if (last.endedAt !== null) return prev;
+      return { ...prev, [clientId]: [...list.slice(0, -1), update(last)] };
+    });
   }, []);
 
   const statusOf = useCallback(
@@ -129,58 +235,83 @@ export function ClientVisitProvider({ children }: { children: ReactNode }) {
     [statuses],
   );
 
-  const activityOf = useCallback(
-    (clientId: string): VisitActivity => activity[clientId] ?? EMPTY_ACTIVITY,
-    [activity],
-  );
-
-  const exitOf = useCallback((clientId: string): ExitRecord | undefined => exits[clientId], [exits]);
-
-  const updateActivity = useCallback((clientId: string, patch: Partial<VisitActivity>) => {
-    setActivity((prev) => ({
-      ...prev,
-      [clientId]: { ...(prev[clientId] ?? EMPTY_ACTIVITY), ...patch },
-    }));
+  /**
+   * Opens a visit, and refuses to open a second one on top of an open one — check-in is reachable
+   * from a screen the seller can walk back into, and two visits for one arrival would be a
+   * duplicate in the supervisor's count.
+   *
+   * The status goes back to "iniciado" even for a client that already closed a visit today, and
+   * that is not a downgrade: it says the seller is inside right now, which is true and is what the
+   * map is for. Whatever the visit ends as overwrites it a moment later.
+   */
+  const markEntry = useCallback((clientId: string) => {
+    setVisits((prev) => {
+      const list = prev[clientId] ?? NO_VISITS;
+      const last = list[list.length - 1];
+      if (last && last.endedAt === null) return prev;
+      return {
+        ...prev,
+        [clientId]: [...list, { startedAt: Date.now(), endedAt: null, activity: EMPTY_ACTIVITY }],
+      };
+    });
+    setStatuses((prev) => ({ ...prev, [clientId]: 'iniciado' }));
   }, []);
 
-  const markEntry = useCallback(
-    (clientId: string) => {
-      updateActivity(clientId, { entered: true });
-      startVisitTimer(clientId);
-      // Starting a visit moves a not-yet-visited client to "iniciado"; never
-      // downgrade a client that already reached a terminal state.
-      setStatuses((prev) => {
-        const current = prev[clientId] ?? defaultStatusFor(clientId);
-        return current === 'no-visitado' ? { ...prev, [clientId]: 'iniciado' } : prev;
-      });
-    },
-    [updateActivity, startVisitTimer],
-  );
-
   const markTasksDone = useCallback(
-    (clientId: string) => updateActivity(clientId, { tasksDone: true }),
-    [updateActivity],
+    (clientId: string) =>
+      updateOpenVisit(clientId, (visit) => ({
+        ...visit,
+        activity: { ...visit.activity, tasksDone: true },
+      })),
+    [updateOpenVisit],
   );
 
   const markOrder = useCallback(
-    (clientId: string) => {
-      updateActivity(clientId, { ordered: true });
-      markVisitEnd(clientId);
+    (clientId: string, options?: { closeVisit?: boolean }) => {
+      const closedAt = Date.now();
+      updateOpenVisit(clientId, (visit) => ({
+        ...visit,
+        endedAt: options?.closeVisit ? closedAt : visit.endedAt,
+        activity: { ...visit.activity, ordered: true },
+      }));
+      // Set outside the visit update because it is also the remote order's only effect: no visit
+      // was open, nothing closed, and the client still sold something today.
       setStatuses((prev) => ({ ...prev, [clientId]: 'visitado' }));
     },
-    [updateActivity, markVisitEnd],
+    [updateOpenVisit],
+  );
+
+  /**
+   * Ends a visit that already did its job — an order was placed, or a task was completed. No
+   * reason and no photo, because there is nothing to explain: the order is the evidence.
+   *
+   * Refuses a visit with nothing on it. Leaving a client without selling or doing anything is
+   * exactly what supervision reads the justifications for, so that case has to go through
+   * `markExceptionalExit` and cannot be waved through from a one-tap button.
+   */
+  const markVisitDone = useCallback(
+    (clientId: string) => {
+      const activity = openVisitOf(clientId)?.activity;
+      if (!activity || (!activity.ordered && !activity.tasksDone)) return;
+      updateOpenVisit(clientId, (visit) => ({ ...visit, endedAt: Date.now() }));
+      setStatuses((prev) => ({
+        ...prev,
+        [clientId]: activity.ordered ? 'visitado' : 'trabajado',
+      }));
+    },
+    [openVisitOf, updateOpenVisit],
   );
 
   const markExceptionalExit = useCallback(
     (clientId: string, record: ExitRecord) => {
-      setExits((prev) => ({ ...prev, [clientId]: record }));
-      markVisitEnd(clientId);
-      setStatuses((prev) => {
-        const tasksDone = activity[clientId]?.tasksDone ?? false;
-        return { ...prev, [clientId]: tasksDone ? 'trabajado' : 'cerrado-observado' };
-      });
+      const tasksDone = openVisitOf(clientId)?.activity.tasksDone ?? false;
+      updateOpenVisit(clientId, (visit) => ({ ...visit, endedAt: Date.now(), exit: record }));
+      setStatuses((prev) => ({
+        ...prev,
+        [clientId]: tasksDone ? 'trabajado' : 'cerrado-observado',
+      }));
     },
-    [activity, markVisitEnd],
+    [openVisitOf, updateOpenVisit],
   );
 
   const clients = useMemo(
@@ -196,27 +327,31 @@ export function ClientVisitProvider({ children }: { children: ReactNode }) {
     () => ({
       clients,
       statusOf,
+      visitsOf,
+      openVisits,
+      openVisitOf,
+      currentVisitOf,
       activityOf,
       exitOf,
-      startedAtOf,
-      endedAtOf,
-      startVisitTimer,
       markEntry,
       markTasksDone,
       markOrder,
+      markVisitDone,
       markExceptionalExit,
     }),
     [
       clients,
       statusOf,
+      visitsOf,
+      openVisits,
+      openVisitOf,
+      currentVisitOf,
       activityOf,
       exitOf,
-      startedAtOf,
-      endedAtOf,
-      startVisitTimer,
       markEntry,
       markTasksDone,
       markOrder,
+      markVisitDone,
       markExceptionalExit,
     ],
   );
@@ -228,4 +363,9 @@ export function useClientVisits() {
   const ctx = useContext(ClientVisitContext);
   if (!ctx) throw new Error('useClientVisits must be used within a ClientVisitProvider');
   return ctx;
+}
+
+/** How long a visit lasted, or has lasted so far. */
+export function visitDuration(visit: Visit, now: number = Date.now()): number {
+  return (visit.endedAt ?? now) - visit.startedAt;
 }

@@ -1,10 +1,14 @@
 import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { TodayActivity } from '@/components/client/today-activity';
+import { ordersPlacedToday } from '@/components/client/today-orders';
 import { VisitTimer } from '@/components/client/visit-timer';
 import { MiniMap } from '@/components/map/mini-map';
+import { OrderDetailSheet } from '@/components/orders/order-detail-sheet';
+import { OrderSummarySheet, summaryFromOrder } from '@/components/orders/order-summary-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { useDialog } from '@/components/ui/dialog';
@@ -13,9 +17,13 @@ import { OfflineBadge } from '@/components/ui/offline-badge';
 import { PhotoPicker } from '@/components/ui/photo-picker';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { CHANNEL_META, CLIENT_STATE_META, EXIT_REASONS, REMOTE_REASONS, STATUS_META } from '@/data/mock-clients';
+import type { PlacedOrder } from '@/data/mock-orders';
 import { mockSeller } from '@/data/mock-user';
 import { useClientVisits } from '@/context/client-visit-context';
+import { useOrders } from '@/context/orders-context';
 import { useContentInsets } from '@/hooks/use-content-insets';
+import { useHardwareBack } from '@/hooks/use-hardware-back';
+import { useOrderActions } from '@/hooks/use-order-actions';
 import { useTheme } from '@/hooks/use-theme';
 import type { ThemeColor } from '@/constants/theme';
 import { formatBs } from '@/utils/currency';
@@ -52,10 +60,23 @@ export default function ClientDetailScreen() {
   const router = useRouter();
   const dialog = useDialog();
   const insets = useContentInsets();
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const { clients, activityOf, startVisitTimer, markEntry, markExceptionalExit } =
+  // `exit` is set by the in-visit bar when the open visit has nothing to show for itself: that
+  // close needs a reason and a photo, so the bar sends the seller here with the sheet already up
+  // instead of dropping them on a menu with no hint of what it wanted.
+  const { id, exit, step: stepParam } = useLocalSearchParams<{
+    id: string;
+    exit?: string;
+    step?: string;
+  }>();
+  const { clients, visitsOf, openVisitOf, markEntry, markVisitDone, markExceptionalExit } =
     useClientVisits();
+  const { orders, find: findOrder } = useOrders();
+  const { startEdit, confirmDelete } = useOrderActions();
   const [visitStep, setVisitStep] = useState<VisitStep>('none');
+  /** Which of today's orders is open in the detail sheet, by number. */
+  const [openOrderId, setOpenOrderId] = useState<number | null>(null);
+  /** The order whose shareable summary is open — held by value, as a snapshot being read aloud. */
+  const [summaryOrder, setSummaryOrder] = useState<PlacedOrder | null>(null);
   const [exitVisible, setExitVisible] = useState(false);
   const [exitReason, setExitReason] = useState<string | null>(null);
   const [exitPhotos, setExitPhotos] = useState<string[]>([]);
@@ -66,11 +87,53 @@ export default function ClientDetailScreen() {
   // the client, so hiding them by default would bury the reason the card exists.
   const [summaryOpen, setSummaryOpen] = useState(true);
 
+  // Consumed, not just read: the param is cleared as it opens the sheet, so dismissing the sheet
+  // and coming back to this screen does not spring it open again.
+  useEffect(() => {
+    if (exit !== '1') return;
+    setExitVisible(true);
+    router.setParams({ exit: undefined });
+  }, [exit, router]);
+
+  /**
+   * Sent back by a confirmed remote order. This screen was left standing on the reason picker that
+   * started it, and returning to a spent form — with its reason still selected, offering to
+   * continue to the catalog — reads as if nothing had been placed. The reason is dropped with the
+   * step, so the next remote order starts from a blank one.
+   */
+  useEffect(() => {
+    if (stepParam !== 'menu') return;
+    setVisitStep('none');
+    setRemoteReason(null);
+    router.setParams({ step: undefined });
+  }, [stepParam, router]);
+
   const client = clients.find((c) => c.id === id) ?? null;
 
-  // Only 'no-visitado' clients still need to check in; the rest already did, so
-  // "Presencial" takes them straight to the task step.
-  const needsCheckIn = client?.status === 'no-visitado';
+  /** Today's visits to this client, and the one the seller is inside right now if any. */
+  const visits = client ? visitsOf(client.id) : [];
+  const openVisit = client ? openVisitOf(client.id) : null;
+
+  /**
+   * Check-in is required whenever there is no visit open — including for a client already worked
+   * this morning. It used to be asked only of a 'no-visitado' client, which meant a seller
+   * returning to a closed client walked straight into the task step from anywhere in the city:
+   * a second visit with no proof of location, recorded on top of the first one.
+   */
+  const needsCheckIn = openVisit === null;
+  /** A client with history and no open visit is being returned to, not visited for the first time. */
+  const isRevisit = needsCheckIn && visits.length > 0;
+
+  /**
+   * The step actually rendered. `tarea` only means anything inside a visit, so an order closing
+   * the visit underneath it drops the screen back to the client's own menu instead of leaving the
+   * in-visit actions up — which is what used to let a second order be taken on a closed visit.
+   */
+  const step: VisitStep = visitStep === 'tarea' && !openVisit ? 'none' : visitStep;
+
+  /** What this client already bought today, and which of those orders the sheet is showing. */
+  const todaysOrders = client ? ordersPlacedToday(orders, client.id) : [];
+  const openOrder = openOrderId === null ? null : findOrder(openOrderId);
 
   // Inputs for the check-in mini map. They live above the "client not found" guard
   // because hooks cannot sit behind an early return, and they are memoized because
@@ -86,15 +149,25 @@ export default function ClientDetailScreen() {
     [theme, pinColor],
   );
 
-  const goBack = () => {
-    if (visitStep === 'tarea') {
-      setVisitStep(needsCheckIn ? 'entrada' : 'none');
-      return;
-    }
-    if (visitStep === 'entrada' || visitStep === 'remoto') {
+  /**
+   * The one step out of the visit's actions and back to the client's menu — never back into the
+   * check-in, which would offer to open a visit that is already open.
+   *
+   * Returns whether it consumed the gesture, so the phone's back button can share it: the header
+   * arrow and the hardware button now collapse the same step and leave at the same moment.
+   */
+  const stepBack = useCallback(() => {
+    if (step === 'tarea' || step === 'entrada' || step === 'remoto') {
       setVisitStep('none');
-      return;
+      return true;
     }
+    return false;
+  }, [step]);
+
+  useHardwareBack(stepBack);
+
+  const goBack = () => {
+    if (stepBack()) return;
     router.canGoBack() ? router.back() : router.replace('/map' as Href);
   };
 
@@ -126,8 +199,16 @@ export default function ClientDetailScreen() {
   const withinRange = distanceM <= MIN_CHECKIN_DISTANCE_M;
 
   // Exceptional exit → "trabajado" if any task was done during the visit, else "cerrado-observado".
-  const willBeWorked = activityOf(client.id).tasksDone;
+  const willBeWorked = openVisit?.activity.tasksDone ?? false;
   const canConfirmExit = exitReason !== null && exitPhotos.length > 0;
+
+  /**
+   * Whether the visit has anything to show for itself. It decides which of the two exits the
+   * seller gets, and the two are different acts rather than the same one with a shortcut: a visit
+   * that sold or worked ends normally and owes no explanation, while one that did neither is the
+   * exception supervision reads the reasons for.
+   */
+  const visitProductive = (openVisit?.activity.ordered || openVisit?.activity.tasksDone) ?? false;
 
   // Debt tones. Only meaningful when the client actually owes money — a debt-free
   // client shows no alarm color and no due-date gradient.
@@ -173,7 +254,7 @@ export default function ClientDetailScreen() {
 
           <View style={styles.titleColumn}>
             <ThemedText type="smallBold" style={styles.headerTitle}>
-              {visitStep === 'none' ? 'Cliente' : visitStep === 'remoto' ? 'Pedido remoto' : 'Visita presencial'}
+              {step === 'none' ? 'Cliente' : step === 'remoto' ? 'Pedido remoto' : 'Visita presencial'}
             </ThemedText>
             {/* The owner, not the point of sale: the route is organised by who the
                 account belongs to, and the header is route-level context. The card
@@ -252,7 +333,7 @@ export default function ClientDetailScreen() {
                 <StatTile label="Drop size" value={formatBs(client.dropSize)} />
               </View>
 
-              {visitStep !== 'entrada' ? (
+              {step !== 'entrada' ? (
                 <>
                   <View style={[styles.hr, { backgroundColor: theme.border }]} />
 
@@ -287,7 +368,19 @@ export default function ClientDetailScreen() {
           ) : null}
         </View>
 
-        {visitStep === 'entrada' ? (
+        {/* What already happened with this client today, as two counts with the lists one tap
+            behind them. It sits outside the step branches on purpose — these are facts about the
+            client, not actions of a visit — and it is hidden during check-in, which is a task with
+            one question in it. */}
+        {step !== 'entrada' ? (
+          <TodayActivity
+            orders={todaysOrders}
+            visits={visits}
+            onOpenOrder={(order) => setOpenOrderId(order.id)}
+          />
+        ) : null}
+
+        {step === 'entrada' ? (
           <>
             {/* Distance / geofence */}
             <View style={[styles.card, styles.distanceCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
@@ -371,7 +464,7 @@ export default function ClientDetailScreen() {
               </ThemedText>
             </Pressable>
           </>
-        ) : visitStep === 'remoto' ? (
+        ) : step === 'remoto' ? (
           <>
             {/* Remote-order card — no stepper: this is not an on-site visit */}
             <View style={[styles.card, styles.distanceCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
@@ -436,7 +529,7 @@ export default function ClientDetailScreen() {
               </ThemedText>
             </Pressable>
           </>
-        ) : visitStep === 'tarea' ? (
+        ) : step === 'tarea' ? (
           <>
             {/* Primary action — the whole point of the visit: open the product catalog */}
             <Pressable
@@ -469,27 +562,56 @@ export default function ClientDetailScreen() {
               />
             </View>
 
-            {/* Close the visit without an order — only while "iniciado" (no order
-                and no exceptional exit yet); every other state already implies a
-                closed visit, so no exit is offered. */}
-            {client.status === 'iniciado' ? (
+            {/* Close the visit without an order. Gated on the visit being open rather than on the
+                client's status, which is a summary of the whole day: on a second visit to a client
+                already marked "visitado" this morning, the status says closed while the seller is
+                standing inside an open one. */}
+            {openVisit ? (
               <>
-                <SectionLabel>Cerrar visita</SectionLabel>
+                <SectionLabel>{visitProductive ? 'Terminar visita' : 'Cerrar visita'}</SectionLabel>
+                {/* Green and immediate once the visit earned its close, red and owing an
+                    explanation until then. Same colour language as the in-visit bar, so the
+                    seller reads the same answer wherever they happen to be looking. */}
                 <Pressable
-                  onPress={() => setExitVisible(true)}
-                  style={[styles.orderCard, { backgroundColor: theme.dangerSoft, borderColor: theme.danger }]}>
-                  <View style={[styles.orderIcon, { backgroundColor: theme.danger }]}>
-                    <Icon name="door.exit" size={20} color={theme.onAccent} />
+                  onPress={() =>
+                    visitProductive ? markVisitDone(client.id) : setExitVisible(true)
+                  }
+                  style={[
+                    styles.orderCard,
+                    visitProductive
+                      ? { backgroundColor: theme.successSoft, borderColor: theme.success }
+                      : { backgroundColor: theme.dangerSoft, borderColor: theme.danger },
+                  ]}>
+                  <View
+                    style={[
+                      styles.orderIcon,
+                      { backgroundColor: visitProductive ? theme.success : theme.danger },
+                    ]}>
+                    <Icon
+                      name={visitProductive ? 'checkmark' : 'door.exit'}
+                      size={20}
+                      color={theme.onAccent}
+                    />
                   </View>
                   <View style={styles.orderText}>
-                    <ThemedText type="smallBold" style={{ color: theme.danger }}>
-                      Marcar salida
+                    <ThemedText
+                      type="smallBold"
+                      style={{ color: visitProductive ? theme.success : theme.danger }}>
+                      {visitProductive ? 'Finalizar visita' : 'Marcar salida'}
                     </ThemedText>
                     <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-                      Salida excepcional · requiere justificación
+                      {visitProductive
+                        ? openVisit.activity.ordered
+                          ? 'Pedido registrado · sin justificación'
+                          : 'Tareas realizadas · sin justificación'
+                        : 'Salida excepcional · requiere justificación'}
                     </ThemedText>
                   </View>
-                  <Icon name="chevron.right" size={18} color={theme.danger} />
+                  <Icon
+                    name="chevron.right"
+                    size={18}
+                    color={visitProductive ? theme.success : theme.danger}
+                  />
                 </Pressable>
               </>
             ) : null}
@@ -503,19 +625,15 @@ export default function ClientDetailScreen() {
             {/* Visit options */}
             <SectionLabel>Visitas y pedidos</SectionLabel>
             <View style={styles.optionsRow}>
+              {/* A return is a new visit and says so, because it costs the seller another
+                  check-in and produces another record. What it is for — tareas, un segundo
+                  pedido — is decided inside it, the same as the first one. */}
               <OptionButton
                 icon="mappin"
-                label="Presencial"
+                label={isRevisit ? 'Nueva visita' : 'Presencial'}
                 color="accent"
                 soft="accentSoft"
-                onPress={() => {
-                  if (needsCheckIn) {
-                    setVisitStep('entrada');
-                  } else {
-                    startVisitTimer(client.id);
-                    setVisitStep('tarea');
-                  }
-                }}
+                onPress={() => setVisitStep(needsCheckIn ? 'entrada' : 'tarea')}
               />
               {/* No returns here: a return is something that happens during a visit, so
                   it only belongs to the started-visit view further down. */}
@@ -684,6 +802,30 @@ export default function ClientDetailScreen() {
           </View>
         </ScrollView>
       </BottomSheet>
+
+      {/* The same sheet the orders list opens, on the same orders, with the same two-hour rule
+          inside it. Editing from here needs no visit and starts none — it is a correction to a
+          document, not a call on a client. */}
+      <OrderDetailSheet
+        order={openOrder}
+        onClose={() => setOpenOrderId(null)}
+        onEdit={() =>
+          openOrder && startEdit(openOrder, () => setOpenOrderId(null), `/client/${client.id}`)
+        }
+        onDelete={() => openOrder && confirmDelete(openOrder, () => setOpenOrderId(null))}
+        // Hands the order over before closing, so the summary keeps something to show once the
+        // sheet that opened it is gone.
+        onShowSummary={() => {
+          setSummaryOrder(openOrder);
+          setOpenOrderId(null);
+        }}
+      />
+
+      <OrderSummarySheet
+        data={summaryOrder ? summaryFromOrder(summaryOrder) : null}
+        visible={summaryOrder !== null}
+        onClose={() => setSummaryOrder(null)}
+      />
     </View>
   );
 }

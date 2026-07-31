@@ -3,9 +3,10 @@ import { useMemo, useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { ChannelSheet } from '@/components/map/channel-sheet';
 import { ClientCard } from '@/components/map/client-card';
+import { StatusChip } from '@/components/map/status-chip';
 import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
-import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
+import { ControlHeight, Radius, Spacing } from '@/constants/theme';
 import {
   CHANNEL_META,
   CHANNEL_ORDER,
@@ -26,7 +27,7 @@ export function ClientList() {
   const theme = useTheme();
   const router = useRouter();
   const insets = useContentInsets();
-  const { clients } = useClientVisits();
+  const { clients, openVisits } = useClientVisits();
 
   const todayClients = useMemo(() => clients.filter((c) => c.visitToday), [clients]);
 
@@ -44,6 +45,13 @@ export function ClientList() {
     const counts = {} as Record<SalesChannel, number>;
     CHANNEL_ORDER.forEach((channel) => (counts[channel] = 0));
     baseClients.forEach((c) => (counts[c.channel] += 1));
+    return counts;
+  }, [baseClients]);
+
+  const statusCounts = useMemo(() => {
+    const counts = {} as Record<VisitStatus, number>;
+    STATUS_ORDER.forEach((status) => (counts[status] = 0));
+    baseClients.forEach((c) => (counts[c.status] += 1));
     return counts;
   }, [baseClients]);
 
@@ -154,6 +162,10 @@ export function ClientList() {
                 active={statusFilter === status}
                 color={theme[meta.color]}
                 soft={theme[meta.soft]}
+                count={statusCounts[status]}
+                // Only "iniciado" carries the pulse: it is the status that means the seller is
+                // inside someone, and a chip that beat for every state would say nothing.
+                live={status === 'iniciado' && openVisits.length > 0}
                 onPress={() => setStatusFilter(status)}
               />
             );
@@ -215,40 +227,6 @@ function SegmentButton({
         type="smallBold"
         numberOfLines={1}
         style={[styles.segmentLabel, { color: active ? theme.onAccent : theme.textSecondary }]}>
-        {label}
-      </ThemedText>
-    </Pressable>
-  );
-}
-
-function StatusChip({
-  label,
-  active,
-  color,
-  soft,
-  onPress,
-}: {
-  label: string;
-  active: boolean;
-  color: string;
-  soft: string;
-  onPress: () => void;
-}) {
-  const theme = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[
-        styles.statusChip,
-        {
-          backgroundColor: active ? soft : theme.backgroundElement,
-          borderColor: active ? color : theme.border,
-        },
-      ]}>
-      <View style={[styles.statusChipDot, { backgroundColor: color }]} />
-      <ThemedText
-        type="smallBold"
-        style={[styles.statusChipText, { color: active ? color : theme.textSecondary }]}>
         {label}
       </ThemedText>
     </Pressable>
@@ -347,23 +325,6 @@ const styles = StyleSheet.create({
   channelButtonLabel: {
     fontSize: 11,
     maxWidth: 90,
-  },
-  statusChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: ChipPadding.horizontal,
-    paddingVertical: ChipPadding.vertical,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
-  },
-  statusChipDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  statusChipText: {
-    fontSize: 11,
   },
   listContent: {
     paddingHorizontal: Spacing.three,

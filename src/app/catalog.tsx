@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
-import { useMemo, useRef, useState, type ComponentProps } from 'react';
+import { useCallback, useMemo, useRef, useState, type ComponentProps } from 'react';
 import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -16,10 +16,12 @@ import { useDialog } from '@/components/ui/dialog';
 import { Icon } from '@/components/ui/icon';
 import { OfflineBadge } from '@/components/ui/offline-badge';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
-import { useCart } from '@/context/cart-context';
+import { useCart, useCartScope } from '@/context/cart-context';
 import { useClientVisits } from '@/context/client-visit-context';
 import { useOrderIncentives } from '@/context/order-incentives-context';
+import { useOrders } from '@/context/orders-context';
 import type { PaymentMethod } from '@/data/mock-incentives';
+import { orderNumberLabel } from '@/data/mock-orders';
 import {
   estrategiaProducts,
   lastOrderLines,
@@ -27,6 +29,7 @@ import {
   ultimosVendidosProducts,
 } from '@/data/mock-catalog';
 import { useContentInsets } from '@/hooks/use-content-insets';
+import { useHardwareBack } from '@/hooks/use-hardware-back';
 import { useTheme } from '@/hooks/use-theme';
 import { CartLine, CatalogTabKey, Product } from '@/types/catalog';
 
@@ -72,11 +75,29 @@ export default function CatalogScreen() {
   // `editOrderId` is set only when the catalog was opened to amend a placed order. It is carried
   // straight through to the summary rather than acted on here: this screen builds a cart either
   // way, and only the save at the end differs.
-  const { clientId, editOrderId } = useLocalSearchParams<{
+  const { clientId, editOrderId, returnTo } = useLocalSearchParams<{
     clientId?: string;
     editOrderId?: string;
+    /** Where ending the edit lands, set by whoever started it. Defaults to the orders list. */
+    returnTo?: string;
   }>();
   const { clients } = useClientVisits();
+  const { find: findOrder } = useOrders();
+
+  /**
+   * Which of the two orders this instance of the catalog is building. Taken from the param and not
+   * from `editingOrder` below: a param naming an order that has since been deleted still means the
+   * seller arrived here to edit, and its lines are what the sheet is holding.
+   */
+  useCartScope(editOrderId ? 'edit' : 'draft');
+
+  /**
+   * The order being amended, resolved rather than trusted: the param is a string carrying a number,
+   * and an id that no longer names anything — an order deleted from the list while this screen sat
+   * in the stack — leaves the screen behaving like the plain catalog it otherwise is, instead of
+   * announcing an edit of nothing.
+   */
+  const editingOrder = findOrder(editOrderId);
 
   // Resolved from the route param, not from mock data: this header used to name a
   // hardcoded client, so it showed the wrong person for whoever was actually being visited.
@@ -90,6 +111,7 @@ export default function CatalogScreen() {
       params: {
         ...(clientId ? { clientId } : {}),
         ...(editOrderId ? { editOrderId } : {}),
+        ...(returnTo ? { returnTo } : {}),
         paymentMethod,
       },
     } as Href);
@@ -229,16 +251,18 @@ export default function CatalogScreen() {
   };
 
   /**
-   * Abandons an edit. Empties the cart on the way out, because it holds the placed order's lines
-   * and leaving them behind is exactly how a half-abandoned edit turns into an accidental new
-   * order the next time the catalog is opened.
+   * Abandons an edit. Drops the amended copy on the way out — nothing was saved, so keeping it
+   * around would only give the next edit somebody else's lines to start from. The seller's own
+   * unfinished order is in the other bucket and is not touched.
    */
-  const cancelEdit = () => {
+  const cancelEdit = useCallback(() => {
     dialog.show({
       icon: 'xmark.circle.fill',
       tone: 'accentAlt',
       title: '¿Salir sin guardar?',
-      message: `Los cambios en ${editOrderId} se descartan. El pedido queda como estaba.`,
+      message: editingOrder
+        ? `Los cambios en el pedido ${orderNumberLabel(editingOrder.id)} se descartan. El pedido queda como estaba.`
+        : 'Los cambios se descartan. El pedido queda como estaba.',
       actions: [
         { label: 'Seguir editando', variant: 'outline' },
         {
@@ -246,15 +270,38 @@ export default function CatalogScreen() {
           variant: 'primary',
           tone: 'accentAlt',
           onPress: () => {
-            cart.clearCart();
             resetIncentives();
-            // Dismisses back to the list this edit started from rather than stacking a second
+            cart.endEdit();
+            // Dismisses back to the screen this edit started from rather than stacking a second
             // copy of it on top of the catalog we are leaving.
-            router.dismissTo('/orders' as Href);
+            router.dismissTo((returnTo ?? '/orders') as Href);
           },
         },
       ],
     });
+    // Stable across renders so the hardware-back listener is not torn down and rebuilt on every
+    // keystroke in the search box.
+  }, [dialog, editingOrder, resetIncentives, cart, router, returnTo]);
+
+  /**
+   * Leaving the catalog. While an order is being edited that is not a navigation but a decision —
+   * the cart is holding somebody's placed order, and walking out silently leaves it half-rewritten
+   * with no word to the seller. So the header arrow and the phone's back button both go through
+   * the same discard dialog the edit banner offers, and neither one leaves on its own.
+   */
+  const leave = useCallback(() => {
+    if (editingOrder) {
+      cancelEdit();
+      return true;
+    }
+    return false;
+  }, [editingOrder, cancelEdit]);
+
+  useHardwareBack(leave);
+
+  const goBack = () => {
+    if (leave()) return;
+    if (router.canGoBack()) router.back();
   };
 
   return (
@@ -263,14 +310,17 @@ export default function CatalogScreen() {
         <View style={styles.headerRow}>
           <Pressable
             hitSlop={8}
-            onPress={() => router.canGoBack() && router.back()}
+            onPress={goBack}
             style={[styles.roundButton, { backgroundColor: theme.backgroundElement }]}>
             <Icon name="chevron.left" size={18} color={theme.text} />
           </Pressable>
 
           <View style={styles.titleColumn}>
+            {/* An edit walks into the same screen as a new order and has to be told apart from one
+                on sight, before any product is touched. The title is the first thing read here, so
+                it is where that belongs. */}
             <ThemedText type="smallBold" style={styles.headerTitle}>
-              Catálogo
+              {editingOrder ? 'Editar pedido' : 'Catálogo'}
             </ThemedText>
             {/* Owner: route-level context, matching every other screen header. */}
             <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
@@ -280,28 +330,46 @@ export default function CatalogScreen() {
 
           <OfflineBadge />
 
-          {/* Visit counter — same placement across every client screen */}
-          {clientId ? <VisitTimer clientId={clientId} compact /> : null}
+          {/* The corner carries whichever number the screen is actually about: the visit clock on a
+              normal round, the order number while amending one. They do not both belong — an edit
+              is started from the orders list, often days after the visit it came from closed, so a
+              timer here would be counting a visit that is over. */}
+          {editingOrder ? (
+            <View style={[styles.orderChip, { backgroundColor: theme.accentAltSoft }]}>
+              <ThemedText
+                type="smallBold"
+                numberOfLines={1}
+                style={[styles.orderChipText, { color: theme.accentAlt }]}>
+                {orderNumberLabel(editingOrder.id)}
+              </ThemedText>
+            </View>
+          ) : clientId ? (
+            <VisitTimer clientId={clientId} compact />
+          ) : null}
         </View>
       </SafeAreaView>
 
-      {/* Amending a placed order looks exactly like building a new one, so it has to say so. It
-          also needs a way out: the cart was loaded with the order's lines, and walking away with
-          the back arrow would leave them sitting there looking like a new order. */}
-      {editOrderId ? (
+      {/* The way out of an edit. The header says which order is being amended, so this no longer
+          repeats the number — what it carries that nothing else does is the exit: a named,
+          confirmed way to end the edit, where the back arrow only leaves the screen and says
+          nothing about the changes typed into it.
+
+          The whole pill takes the press now rather than just the glyph on its end: it is one
+          action, and a 12 px target beside a label that did nothing was the smallest thing on the
+          screen doing the most. */}
+      {editingOrder ? (
         <View style={styles.editBanner}>
-          <View style={[styles.editPill, { backgroundColor: theme.accentAltSoft }]}>
-            <Icon name="pencil" size={12} color={theme.accentAlt} />
+          <Pressable
+            onPress={cancelEdit}
+            style={[styles.editPill, { backgroundColor: theme.accentAltSoft }]}>
+            <Icon name="xmark" size={12} color={theme.accentAlt} />
             <ThemedText
               type="smallBold"
               numberOfLines={1}
               style={[styles.editPillText, { color: theme.accentAlt }]}>
-              Editando {editOrderId}
+              Descartar cambios
             </ThemedText>
-            <Pressable hitSlop={8} onPress={cancelEdit}>
-              <Icon name="xmark" size={12} color={theme.accentAlt} />
-            </Pressable>
-          </View>
+          </Pressable>
         </View>
       ) : null}
 
@@ -497,6 +565,17 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 18,
+  },
+  // Sized like the visit timer it stands in for, so the header keeps its shape whichever of the
+  // two is showing.
+  orderChip: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: Radius.pill,
+  },
+  orderChipText: {
+    fontSize: 11,
+    fontVariant: ['tabular-nums'],
   },
   editBanner: {
     paddingHorizontal: Spacing.three,

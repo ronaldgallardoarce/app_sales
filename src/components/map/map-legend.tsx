@@ -3,13 +3,16 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
+import { PulseDot } from '@/components/ui/pulse-dot';
 import { FloatingShadow, Radius, Spacing } from '@/constants/theme';
+import { useClientVisits } from '@/context/client-visit-context';
 import { STATUS_META, STATUS_ORDER, type MapClient, type VisitStatus } from '@/data/mock-clients';
 import { useTheme } from '@/hooks/use-theme';
 
 export function MapLegend({ clients }: { clients: MapClient[] }) {
   const theme = useTheme();
   const [open, setOpen] = useState(true);
+  const { openVisits } = useClientVisits();
 
   const counts = useMemo(() => {
     const acc = {} as Record<VisitStatus, number>;
@@ -34,7 +37,14 @@ export function MapLegend({ clients }: { clients: MapClient[] }) {
             const meta = STATUS_META[status];
             return (
               <View key={status} style={styles.row}>
-                <View style={[styles.dot, { backgroundColor: theme[meta.color] }]} />
+                {/* Only "iniciado" beats, and only while a visit is actually running: it is the
+                    one row that describes something happening rather than something that
+                    happened, and a legend where every dot moved would just be noise. */}
+                <PulseDot
+                  color={theme[meta.color]}
+                  size={9}
+                  live={status === 'iniciado' && openVisits.length > 0}
+                />
                 <ThemedText type="small" style={styles.label} numberOfLines={1}>
                   {meta.label}
                 </ThemedText>
@@ -76,11 +86,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
-  },
-  dot: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
   },
   label: {
     flex: 1,

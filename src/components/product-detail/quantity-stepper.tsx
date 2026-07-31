@@ -123,7 +123,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   input: {
-    width: 42,
+    // Room for four digits without the last one touching the border. The slack comes out of
+    // the label column beside it, which has it to spare — "Unidad máxima" is the longest thing
+    // it ever holds and still clears its single line.
+    width: 56,
     height: 26,
     borderRadius: Radius.sm,
     borderWidth: 1,

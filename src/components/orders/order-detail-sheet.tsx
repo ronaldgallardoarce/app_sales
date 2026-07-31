@@ -7,9 +7,12 @@ import { ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { deliveryDateLabel } from '@/data/mock-order-details';
 // ORDER_STATUS_META goes with the commented-out status pill below.
 import {
+  canDeleteOrder,
   canEditOrder,
-  editTimeLeftLabel,
-  EDIT_WINDOW_HOURS,
+  CHANGE_WINDOW_HOURS,
+  changeTimeLeftLabel,
+  editBlockedReason,
+  orderNumberLabel,
   type PlacedOrder,
 } from '@/data/mock-orders';
 import { useTheme } from '@/hooks/use-theme';
@@ -29,12 +32,19 @@ export function OrderDetailSheet({
   onClose,
   onEdit,
   onDelete,
+  onShowSummary,
 }: {
   /** Null keeps the sheet closed; a value opens it on that order. */
   order: PlacedOrder | null;
   onClose: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  /**
+   * Opens the shareable summary. Raised to the screen rather than owned here because this sheet
+   * unmounts with the order it is showing, and a summary nested inside would be torn down with it
+   * the moment closing one led to the other.
+   */
+  onShowSummary: () => void;
 }) {
   const theme = useTheme();
   if (!order) return null;
@@ -51,7 +61,9 @@ export function OrderDetailSheet({
    * shown on the list rows; not worth one for a sheet that is open for seconds at a time.
    */
   const editable = canEditOrder(order);
-  const timeLeft = editTimeLeftLabel(order);
+  const deletable = canDeleteOrder(order);
+  const blocked = editBlockedReason(order);
+  const timeLeft = changeTimeLeftLabel(order);
 
   return (
     <BottomSheet visible onClose={onClose} maxHeight={620}>
@@ -59,7 +71,7 @@ export function OrderDetailSheet({
         <View style={styles.headerRow}>
           <View style={styles.headerTexts}>
             <ThemedText type="smallBold" numberOfLines={1} style={styles.id}>
-              {order.id}
+              {orderNumberLabel(order.id)}
             </ThemedText>
             <ThemedText themeColor="textSecondary" numberOfLines={2} style={styles.client}>
               {order.clientCode}-{order.clientName}
@@ -175,9 +187,13 @@ export function OrderDetailSheet({
           </View>
         </View>
 
-        {/* Editing closes a couple of hours after the order was taken. The button stays visible
-            once it expires rather than disappearing: a seller who cannot find it does not know
-            whether the feature is missing or the window is closed, so it says which. */}
+        {/* Editing closes a couple of hours after the order was taken, and for good the first time
+            it is used; deleting closes on the same clock, minus the one-use half. Both buttons stay
+            visible once they close rather than disappearing: a seller who cannot find one does not
+            know whether the feature is missing or the door is shut, so the edit button says which —
+            and names which of the two rules shut it, because "you already edited this" and "you took
+            too long" are different conversations with the office. The trash carries no label to say
+            it with, so its reason lives in the line below. */}
         <View style={styles.actions}>
           <Pressable
             disabled={!editable}
@@ -194,21 +210,44 @@ export function OrderDetailSheet({
               type="smallBold"
               numberOfLines={1}
               style={[styles.actionLabel, { color: editable ? theme.onAccent : theme.textSecondary }]}>
-              {editable ? 'Editar pedido' : 'Ya no se puede editar'}
+              {editable ? 'Editar pedido' : blocked === 'edited' ? 'Ya se editó' : 'Ya no se puede editar'}
             </ThemedText>
           </Pressable>
 
+          {/* Never disabled, unlike the two beside it: reading an order back or sending it to the
+              client is not a change to it, so neither the edit window nor the one-edit rule has
+              anything to say about it. An order the seller can no longer touch is exactly the one
+              they are most likely to be asked to read out. */}
           <Pressable
+            onPress={onShowSummary}
+            style={[styles.deleteButton, { backgroundColor: theme.accentSoft }]}>
+            <Icon name="doc.text" size={15} color={theme.accent} />
+          </Pressable>
+
+          <Pressable
+            disabled={!deletable}
             onPress={onDelete}
-            style={[styles.deleteButton, { backgroundColor: theme.dangerSoft }]}>
-            <Icon name="trash" size={15} color={theme.danger} />
+            style={[
+              styles.deleteButton,
+              {
+                backgroundColor: deletable ? theme.dangerSoft : theme.backgroundSelected,
+                opacity: deletable ? 1 : 0.7,
+              },
+            ]}>
+            <Icon name="trash" size={15} color={deletable ? theme.danger : theme.textSecondary} />
           </Pressable>
         </View>
 
         <ThemedText themeColor="textSecondary" style={styles.editHint}>
+          {/* The one-edit rule is said before it bites, not only after: a seller who knows this is
+              their only pass makes it count, and finding out afterwards is finding out too late.
+              An order that spent its edit is still deletable, so that middle case says what is
+              left rather than reading as if the whole order had closed. */}
           {editable
-            ? `Se puede editar por ${timeLeft} más.`
-            : `Los pedidos se editan dentro de las ${EDIT_WINDOW_HOURS} horas de creados.`}
+            ? `Se puede editar una sola vez o eliminar, por ${timeLeft} más.`
+            : deletable
+              ? `Este pedido ya se editó. Se puede eliminar por ${timeLeft} más.`
+              : `Los pedidos se editan o eliminan dentro de las ${CHANGE_WINDOW_HOURS} horas de creados.`}
         </ThemedText>
       </ScrollView>
     </BottomSheet>
