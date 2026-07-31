@@ -25,6 +25,12 @@ import { useTheme } from '@/hooks/use-theme';
  * visible, because knowing there is something to look at is the part that has to be free, and the
  * detail is one tap behind them. Nothing was removed — a client with no history renders nothing at
  * all, which is what the screen looked like before this ever mattered.
+ *
+ * The visit the seller is inside right now is not counted here, and that is the whole point of the
+ * word "already": on a first check-in this used to appear announcing "1 visita", which was the one
+ * being made, and told the seller nothing they were not already living. Counting only closed
+ * visits means the row shows up exactly when it has something to say — arriving at a client who
+ * was worked earlier today.
  */
 export function TodayActivity({
   orders,
@@ -33,14 +39,17 @@ export function TodayActivity({
 }: {
   /** Already filtered to today and to this client, by `ordersPlacedToday`. */
   orders: PlacedOrder[];
-  /** Today's visits to this client, oldest first. */
+  /** Today's visits to this client, oldest first — the open one included, and filtered out here. */
   visits: Visit[];
   onOpenOrder: (order: PlacedOrder) => void;
 }) {
   const theme = useTheme();
   const [open, setOpen] = useState(false);
 
-  if (orders.length === 0 && visits.length === 0) return null;
+  // A visit with no `endedAt` is the one currently open. History is what closed.
+  const pastVisits = visits.filter((visit) => visit.endedAt !== null);
+
+  if (orders.length === 0 && pastVisits.length === 0) return null;
 
   return (
     <>
@@ -60,11 +69,11 @@ export function TodayActivity({
           />
         ) : null}
 
-        {visits.length > 0 ? (
+        {pastVisits.length > 0 ? (
           <Count
             icon="clock.fill"
-            value={visits.length}
-            label={visits.length === 1 ? 'visita' : 'visitas'}
+            value={pastVisits.length}
+            label={pastVisits.length === 1 ? 'visita' : 'visitas'}
             tone={theme.accent}
           />
         ) : null}
@@ -104,10 +113,10 @@ export function TodayActivity({
             </>
           ) : null}
 
-          {visits.length > 0 ? (
+          {pastVisits.length > 0 ? (
             <>
-              <Label>{visits.length === 1 ? 'Visita' : 'Visitas'}</Label>
-              <VisitHistory visits={visits} />
+              <Label>{pastVisits.length === 1 ? 'Visita' : 'Visitas'}</Label>
+              <VisitHistory visits={pastVisits} />
             </>
           ) : null}
         </ScrollView>
