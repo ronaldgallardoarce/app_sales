@@ -10,19 +10,11 @@ import { OffRouteBadge } from '@/components/map/off-route-badge';
 import { VisitTimer } from '@/components/client/visit-timer';
 import { mockSeller } from '@/data/mock-user';
 import { useTheme, useThemeScheme } from '@/hooks/use-theme';
+import { withAlpha } from '@/utils/color';
 import { formatBs } from '@/utils/currency';
 import { distanceKm, formatDistance } from '@/utils/geo';
 
 const WHATSAPP_GREEN = '#25D366';
-
-/** Adds an alpha channel to a `#rrggbb` color so it can fade into a gradient. */
-function withAlpha(hex: string, alpha: number): string {
-  const value = parseInt(hex.replace('#', ''), 16);
-  const r = (value >> 16) & 255;
-  const g = (value >> 8) & 255;
-  const b = value & 255;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
 
 export function ClientCard({
   client,

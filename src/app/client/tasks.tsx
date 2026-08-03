@@ -7,10 +7,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   LowRotationForm,
   ProductPickerView,
-  emptyLowRotation,
-  isExpiryValid,
-  type LowRotationValue,
+  emptyLowRotationEntry,
+  isLowRotationEntryComplete,
+  type LowRotationEntry,
 } from '@/components/client/low-rotation-form';
+import { LowRotationList } from '@/components/client/low-rotation-list';
 import { VisitTimer } from '@/components/client/visit-timer';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
@@ -28,18 +29,21 @@ import {
 import { useClientVisits } from '@/context/client-visit-context';
 import { useContentInsets } from '@/hooks/use-content-insets';
 import { useTheme, useThemeScheme } from '@/hooks/use-theme';
+import { withAlpha } from '@/utils/color';
 
 type TaskStatus = 'pendiente' | 'completada';
 type Filter = 'todas' | 'pendientes' | 'hechas';
 
 /**
- * Which content the execution sheet shows. The product picker is a swap rather than a
- * second sheet: this renders inside a `BottomSheet`, which is a `Modal`, so another
- * sheet would be presented *below* the open one and never appear. The flag lives here
- * and not in the form because the sheet footer — mounted outside the form — has to
- * know that the seller is picking.
+ * Which content the execution sheet shows. Each of these is a swap rather than a second
+ * sheet: this renders inside a `BottomSheet`, which is a `Modal`, so another sheet would be
+ * presented *below* the open one and never appear. The flag lives here and not in the forms
+ * because the sheet footer — mounted outside them — has to know which action it is offering.
+ *
+ * `entry` is the editor for one slow-moving product; `product` is the picker raised from
+ * inside that editor, so going back from it returns to `entry` and not to `task`.
  */
-type TaskSheetView = 'task' | 'product';
+type TaskSheetView = 'task' | 'entry' | 'product';
 
 /** Max photos allowed on a "foto" task. */
 const MAX_PHOTOS = 3;
@@ -50,12 +54,13 @@ type Draft = {
   text: string;
   checked: Record<string, boolean>;
   rating: number;
-  /** Owned by the form component, which is the only thing that reads its fields. */
-  lowRotation: LowRotationValue;
+  /** The slow-moving products loaded so far. Owned by the form component, which is the only
+   *  thing that reads the fields of an entry. */
+  lowRotation: LowRotationEntry[];
 };
 
 function emptyDraft(): Draft {
-  return { photos: [], text: '', checked: {}, rating: 0, lowRotation: emptyLowRotation() };
+  return { photos: [], text: '', checked: {}, rating: 0, lowRotation: [] };
 }
 
 const FILTERS: { key: Filter; label: string }[] = [
@@ -63,15 +68,6 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'pendientes', label: 'Pendientes' },
   { key: 'hechas', label: 'Hechas' },
 ];
-
-/** Adds an alpha channel to a `#rrggbb` color so it can fade into a gradient. */
-function withAlpha(hex: string, alpha: number): string {
-  const value = parseInt(hex.replace('#', ''), 16);
-  const r = (value >> 16) & 255;
-  const g = (value >> 8) & 255;
-  const b = value & 255;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
 
 export default function ClientTasksScreen() {
   const theme = useTheme();
@@ -88,6 +84,12 @@ export default function ClientTasksScreen() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [sheetView, setSheetView] = useState<TaskSheetView>('task');
+  /**
+   * The entry being added or edited. A scratch copy, not a reference into `draft.lowRotation`:
+   * backing out of the editor has to leave the loaded record exactly as it was, and saving is
+   * the only thing that writes to the list.
+   */
+  const [entryDraft, setEntryDraft] = useState<LowRotationEntry | null>(null);
 
   const goBack = () => (router.canGoBack() ? router.back() : router.replace('/map' as Href));
 
@@ -123,8 +125,10 @@ export default function ClientTasksScreen() {
     // Seed the draft: re-open a completed task with a fresh sheet (mockup keeps
     // no persisted answer), otherwise start blank.
     setDraft(emptyDraft());
-    // A sheet left on the picker would open the next task showing a product list.
+    // A sheet left on the editor or the picker would open the next task showing a
+    // half-filled product form.
     setSheetView('task');
+    setEntryDraft(null);
     setActiveId(task.id);
   };
 
@@ -136,6 +140,42 @@ export default function ClientTasksScreen() {
     // Signal the visit that at least one task was done — drives the exit status.
     if (client) markTasksDone(client.id);
     setActiveId(null);
+  };
+
+  /* --- Slow-moving entries: the list lives in the draft, the editor in `entryDraft` --- */
+
+  const addEntry = () => {
+    setEntryDraft(emptyLowRotationEntry());
+    setSheetView('entry');
+  };
+
+  const editEntry = (id: string) => {
+    const entry = draft.lowRotation.find((e) => e.id === id);
+    if (!entry) return;
+    setEntryDraft({ ...entry, photos: [...entry.photos] });
+    setSheetView('entry');
+  };
+
+  const removeEntry = (id: string) =>
+    setDraft((d) => ({ ...d, lowRotation: d.lowRotation.filter((e) => e.id !== id) }));
+
+  /** Upsert by id: editing replaces in place, adding appends. */
+  const saveEntry = () => {
+    if (!entryDraft) return;
+    setDraft((d) => ({
+      ...d,
+      lowRotation: d.lowRotation.some((e) => e.id === entryDraft.id)
+        ? d.lowRotation.map((e) => (e.id === entryDraft.id ? entryDraft : e))
+        : [...d.lowRotation, entryDraft],
+    }));
+    setEntryDraft(null);
+    setSheetView('task');
+  };
+
+  /** Back out of the editor. The scratch copy is dropped, so the list is untouched. */
+  const cancelEntry = () => {
+    setEntryDraft(null);
+    setSheetView('task');
   };
 
   return (
@@ -254,12 +294,14 @@ export default function ClientTasksScreen() {
         onClose={closeSheet}
         footer={
           activeTask ? (
-            <CompleteButton
+            <SheetFooter
               task={activeTask}
               draft={draft}
+              view={sheetView}
+              entryDraft={entryDraft}
               completed={statusOf(activeTask.id) === 'completada'}
-              locked={sheetView !== 'task'}
-              onPress={completeTask}
+              onComplete={completeTask}
+              onSaveEntry={saveEntry}
             />
           ) : null
         }>
@@ -270,6 +312,12 @@ export default function ClientTasksScreen() {
             setDraft={setDraft}
             view={sheetView}
             onViewChange={setSheetView}
+            entryDraft={entryDraft}
+            setEntryDraft={setEntryDraft}
+            onAddEntry={addEntry}
+            onEditEntry={editEntry}
+            onRemoveEntry={removeEntry}
+            onCancelEntry={cancelEntry}
           />
         ) : null}
       </BottomSheet>
@@ -381,12 +429,24 @@ function TaskSheet({
   setDraft,
   view,
   onViewChange,
+  entryDraft,
+  setEntryDraft,
+  onAddEntry,
+  onEditEntry,
+  onRemoveEntry,
+  onCancelEntry,
 }: {
   task: SupervisorTask;
   draft: Draft;
   setDraft: React.Dispatch<React.SetStateAction<Draft>>;
   view: TaskSheetView;
   onViewChange: (view: TaskSheetView) => void;
+  entryDraft: LowRotationEntry | null;
+  setEntryDraft: React.Dispatch<React.SetStateAction<LowRotationEntry | null>>;
+  onAddEntry: () => void;
+  onEditEntry: (id: string) => void;
+  onRemoveEntry: (id: string) => void;
+  onCancelEntry: () => void;
 }) {
   const theme = useTheme();
   const accent = TASK_COLOR_META[task.color];
@@ -394,19 +454,53 @@ function TaskSheet({
 
   // Nothing of the task renders while picking — no header, chips, description or hint.
   // Giving the picker the whole sheet is the reason for swapping instead of expanding
-  // the list inline.
-  if (view === 'product') {
+  // the list inline. Back returns to the editor it was raised from, not to the task.
+  if (view === 'product' && entryDraft) {
     return (
       <ScrollView
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.sheetScroll}>
         <ProductPickerView
-          selectedId={draft.lowRotation.productId}
-          onSelect={(productId) =>
-            setDraft((d) => ({ ...d, lowRotation: { ...d.lowRotation, productId } }))
-          }
-          onBack={() => onViewChange('task')}
+          selectedId={entryDraft.productId}
+          onSelect={(productId) => setEntryDraft((e) => (e ? { ...e, productId } : e))}
+          onBack={() => onViewChange('entry')}
+        />
+      </ScrollView>
+    );
+  }
+
+  // The editor takes the sheet the same way, for the same reason: it is a form of its own
+  // and the task's header above it would only compete with the product being loaded.
+  if (view === 'entry' && entryDraft) {
+    return (
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.sheetScroll}>
+        <View style={styles.entryHeader}>
+          <Pressable
+            hitSlop={8}
+            onPress={onCancelEntry}
+            style={[styles.roundButton, { backgroundColor: theme.background }]}>
+            <Icon name="chevron.left" size={18} color={theme.text} />
+          </Pressable>
+          <View style={styles.entryTitles}>
+            <ThemedText type="smallBold" style={styles.entryTitle}>
+              {draft.lowRotation.some((e) => e.id === entryDraft.id)
+                ? 'Editar producto'
+                : 'Nuevo producto'}
+            </ThemedText>
+            <ThemedText type="small" themeColor="textSecondary" style={styles.entrySubtitle}>
+              Vencimiento, lote, cantidad y fotos
+            </ThemedText>
+          </View>
+        </View>
+
+        <LowRotationForm
+          value={entryDraft}
+          onChange={(patch) => setEntryDraft((e) => (e ? { ...e, ...patch } : e))}
+          onOpenProductPicker={() => onViewChange('product')}
         />
       </ScrollView>
     );
@@ -484,12 +578,11 @@ function TaskSheet({
       ) : task.responseType === 'checklist' ? (
         <ChecklistInput task={task} draft={draft} setDraft={setDraft} />
       ) : task.responseType === 'baja-rotacion' ? (
-        <LowRotationForm
-          value={draft.lowRotation}
-          onChange={(patch) => setDraft((d) => ({ ...d, lowRotation: { ...d.lowRotation, ...patch } }))}
-          photos={draft.photos}
-          onPhotosChange={(photos) => setDraft((d) => ({ ...d, photos }))}
-          onOpenProductPicker={() => onViewChange('product')}
+        <LowRotationList
+          entries={draft.lowRotation}
+          onAdd={onAddEntry}
+          onEdit={onEditEntry}
+          onRemove={onRemoveEntry}
         />
       ) : (
         <RatingInput value={draft.rating} onChange={(rating) => setDraft((d) => ({ ...d, rating }))} />
@@ -574,55 +667,85 @@ function isDraftComplete(task: SupervisorTask, draft: Draft): boolean {
       return Object.values(draft.checked).some(Boolean);
     case 'calificacion':
       return draft.rating > 0;
-    case 'baja-rotacion': {
-      // Every field of the record matters: a product with no lot or no expiry is not a
-      // half-filled record, it is an unusable one.
-      const { productId, expiry, lot, qty } = draft.lowRotation;
-      return (
-        productId !== null &&
-        // The strict check, not just "ten characters typed": the form already warns that
-        // 31/02 is not a date, and the gate has to agree with the warning.
-        isExpiryValid(expiry) &&
-        lot !== null &&
-        qty > 0 &&
-        draft.photos.length > 0
-      );
-    }
+    case 'baja-rotacion':
+      // Only the count: "Guardar producto" already refused anything incomplete, so a loaded
+      // entry is a complete one by construction.
+      return draft.lowRotation.length > 0;
   }
 }
 
-function CompleteButton({
+/**
+ * The sheet's one action, which is a different action per view. The footer stays mounted
+ * across the swaps, so leaving "Completar tarea" there while the editor is open would let an
+ * optional task be finished from a view that is not showing the task at all — and the button
+ * would read as the way to confirm the product.
+ */
+function SheetFooter({
   task,
   draft,
+  view,
+  entryDraft,
   completed,
-  locked,
-  onPress,
+  onComplete,
+  onSaveEntry,
 }: {
   task: SupervisorTask;
   draft: Draft;
+  view: TaskSheetView;
+  entryDraft: LowRotationEntry | null;
   completed: boolean;
-  /** The sheet is showing something other than the task — see `locked` below. */
-  locked: boolean;
+  onComplete: () => void;
+  onSaveEntry: () => void;
+}) {
+  // The picker has its own back button and confirms by tapping a product. A footer action
+  // there would be a second, competing way to leave.
+  if (view === 'product') return null;
+
+  if (view === 'entry') {
+    return (
+      <FooterButton
+        icon="tray.and.arrow.down"
+        label="Guardar producto"
+        enabled={entryDraft !== null && isLowRotationEntryComplete(entryDraft)}
+        onPress={onSaveEntry}
+      />
+    );
+  }
+
+  return (
+    <FooterButton
+      icon="checkmark"
+      label={completed ? 'Actualizar respuesta' : 'Completar tarea'}
+      enabled={!task.required || isDraftComplete(task, draft)}
+      onPress={onComplete}
+    />
+  );
+}
+
+function FooterButton({
+  icon,
+  label,
+  enabled,
+  onPress,
+}: {
+  icon: IconName;
+  label: string;
+  enabled: boolean;
   onPress: () => void;
 }) {
   const theme = useTheme();
-  // The footer is the sheet's, so it stays mounted over the product picker. Without
-  // `locked`, an optional task (or one whose draft is already valid) could be completed
-  // from a view that is not showing the task at all, and the button would read as the
-  // way to confirm the product.
-  const canComplete = !locked && (!task.required || isDraftComplete(task, draft));
 
   return (
     <Pressable
       onPress={onPress}
-      disabled={!canComplete}
+      disabled={!enabled}
       style={[
         styles.primaryButton,
-        { backgroundColor: canComplete ? theme.accent : theme.backgroundSelected },
+        { backgroundColor: enabled ? theme.accent : theme.backgroundSelected },
       ]}>
-      <Icon name="checkmark" size={16} color={canComplete ? theme.onAccent : theme.textSecondary} />
-      <ThemedText type="smallBold" style={{ color: canComplete ? theme.onAccent : theme.textSecondary }}>
-        {completed ? 'Actualizar respuesta' : 'Completar tarea'}
+      <Icon name={icon} size={16} color={enabled ? theme.onAccent : theme.textSecondary} />
+      <ThemedText type="smallBold" style={{ color: enabled ? theme.onAccent : theme.textSecondary }}>
+        {label}
       </ThemedText>
     </Pressable>
   );
@@ -817,6 +940,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
+  },
+  entryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    marginBottom: Spacing.one,
+  },
+  entryTitles: {
+    flex: 1,
+    gap: 1,
+  },
+  entryTitle: {
+    fontSize: 15,
+    lineHeight: 19,
+  },
+  entrySubtitle: {
+    fontSize: 12,
+    lineHeight: 16,
   },
   sheetIcon: {
     width: 36,

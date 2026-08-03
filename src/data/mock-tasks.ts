@@ -14,14 +14,15 @@ export type TaskResponseType =
   | 'baja-rotacion';
 
 /**
- * Warehouse lot the stock at the client came from. These two codes are what is
- * printed on the package and what the seller reads out loud, so they are stored and
- * rendered as the codes themselves — expanding them into invented long names would
- * only make the seller translate back.
+ * Warehouse the stock at the client shipped from — not the lot number printed on the
+ * package, which is free text the manufacturer stamps and the form captures separately.
+ * These two codes are what the seller reads out loud, so they are stored and rendered as
+ * the codes themselves: expanding them into invented long names would only make the seller
+ * translate back.
  */
 export type LotCode = 'SC' | 'LP';
 
-/** The pickable lots. Single source for the form and any future consumer. */
+/** The pickable warehouses. Single source for the form and any future consumer. */
 export const LOT_CODES: LotCode[] = ['SC', 'LP'];
 
 /** Optional urgency the supervisor may assign to a task. */
@@ -86,7 +87,7 @@ export const RESPONSE_META: Record<
   'baja-rotacion': {
     label: 'Baja rotación',
     icon: 'shippingbox.slash',
-    hint: 'Registrá el producto de baja rotación con su vencimiento, lote, cantidad y fotos.',
+    hint: 'Registrá cada producto de baja rotación con su vencimiento, lote, cantidad y fotos.',
   },
 };
 
@@ -184,7 +185,7 @@ const channelTasks: SupervisorTask[] = [
     id: 't-chan-trad-baja-rotacion',
     scope: { kind: 'canal', channel: 'tradicional' },
     title: 'Registro de baja rotación',
-    description: 'Registrá el producto con baja rotación detectado en el punto de venta.',
+    description: 'Registrá los productos con baja rotación detectados en el punto de venta.',
     color: 'accentAlt',
     responseType: 'baja-rotacion',
     required: false,
