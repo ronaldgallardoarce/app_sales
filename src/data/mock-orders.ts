@@ -2,7 +2,7 @@ import type { ThemeColor } from '@/constants/theme';
 import { mapClients, type MapClient } from '@/data/mock-clients';
 import type { PaymentMethod } from '@/data/mock-incentives';
 import { lastOrderLines, mockProducts } from '@/data/mock-catalog';
-import { toDateKey, type OrderType } from '@/data/mock-order-details';
+import { toDateKey } from '@/data/mock-order-details';
 import type { LineBonification } from '@/data/mock-bonifications';
 import type { CartLine } from '@/types/catalog';
 import { iceTotalOf, lineAmount } from '@/utils/order';
@@ -59,7 +59,6 @@ export type PlacedOrder = {
   deliveryFrom: string;
   deliveryTo: string;
   paymentMethod: PaymentMethod;
-  orderType: OrderType;
   /** Taken without an on-site check-in — the exception, so it is worth surfacing. */
   remote: boolean;
   status: OrderStatus;
@@ -71,6 +70,12 @@ export type PlacedOrder = {
    * it with use — and unlike the clock it never reopens.
    */
   edited: boolean;
+  /**
+   * Why the order was annulled, absent on every order that still stands. Stored on the order and
+   * not merely asked for at the till: the office reconciles annulments against what the seller
+   * told the client, and a reason that only ever lived in a dialog is a reason nobody can look up.
+   */
+  cancelReason?: CancelReason;
   lines: CartLine[];
   /** The free goods granted, one entry per line that earned any. */
   bonifications: LineBonification[];
@@ -81,6 +86,24 @@ export type PlacedOrder = {
   /** Free minimum units across the whole order — derived from `bonifications`. */
   bonificationUnits: number;
 };
+
+/**
+ * Why an order gets annulled. A closed list because these are what the office reports on: free
+ * text would make every annulment its own category and the report unreadable. Ordered by how
+ * often they happen, so the common answers are the ones under the thumb.
+ *
+ * Mock data standing in for a backend catalogue, like the payment terms — whoever wires the real
+ * one in replaces this array and nothing else, since the reason travels as its own text.
+ */
+export const CANCEL_REASONS = [
+  'El cliente se arrepintió',
+  'Error al cargar el pedido',
+  'Producto sin stock',
+  'El cliente tiene deuda pendiente',
+  'Pedido duplicado',
+] as const;
+
+export type CancelReason = (typeof CANCEL_REASONS)[number];
 
 /**
  * The order number written the way it is said out loud: "N° 4518".
@@ -120,15 +143,16 @@ export function canEditOrder(order: PlacedOrder, now: number = Date.now()): bool
 }
 
 /**
- * Whether the order may still be deleted: the same two hours, and only those.
+ * Whether the order may still be annulled: the same two hours, and only those — plus not being
+ * annulled already, which is the one state where the action has nothing left to do.
  *
  * The one-edit half deliberately does not apply here. It exists so an order cannot be reshaped
  * again and again after the office has seen it; an order that used its edit has not used up any
  * right to be withdrawn, and freezing it would leave a seller who amended a mistaken order at
  * 9:05 unable to cancel it at 9:10.
  */
-export function canDeleteOrder(order: PlacedOrder, now: number = Date.now()): boolean {
-  return now - order.createdAtMs < CHANGE_WINDOW_MS;
+export function canAnnulOrder(order: PlacedOrder, now: number = Date.now()): boolean {
+  return order.status !== 'anulado' && now - order.createdAtMs < CHANGE_WINDOW_MS;
 }
 
 /**
@@ -287,7 +311,6 @@ export const mockOrders: PlacedOrder[] = [
     deliveryFrom: '08:00',
     deliveryTo: '12:00',
     paymentMethod: 'Contado',
-    orderType: 'Normal',
     remote: false,
     status: 'confirmado',
     synced: false,
@@ -311,7 +334,6 @@ export const mockOrders: PlacedOrder[] = [
     deliveryFrom: '14:00',
     deliveryTo: '18:00',
     paymentMethod: 'Pronto pago',
-    orderType: 'Normal',
     remote: true,
     status: 'confirmado',
     synced: true,
@@ -330,7 +352,6 @@ export const mockOrders: PlacedOrder[] = [
     deliveryFrom: '08:00',
     deliveryTo: '10:00',
     paymentMethod: 'Contado',
-    orderType: 'Normal',
     remote: false,
     status: 'entregado',
     synced: true,
@@ -346,7 +367,6 @@ export const mockOrders: PlacedOrder[] = [
     deliveryFrom: '10:00',
     deliveryTo: '12:00',
     paymentMethod: 'Contado',
-    orderType: 'Licitación',
     remote: false,
     status: 'entregado',
     synced: true,
@@ -366,7 +386,6 @@ export const mockOrders: PlacedOrder[] = [
     deliveryFrom: '08:00',
     deliveryTo: '18:00',
     paymentMethod: 'Pronto pago',
-    orderType: 'Normal',
     remote: true,
     status: 'anulado',
     synced: true,
@@ -382,7 +401,6 @@ export const mockOrders: PlacedOrder[] = [
     deliveryFrom: '12:00',
     deliveryTo: '14:00',
     paymentMethod: 'Contado',
-    orderType: 'Normal',
     remote: false,
     status: 'entregado',
     synced: true,
@@ -398,7 +416,6 @@ export const mockOrders: PlacedOrder[] = [
     deliveryFrom: '16:00',
     deliveryTo: '18:00',
     paymentMethod: 'Contado',
-    orderType: 'Normal',
     remote: false,
     status: 'borrador',
     synced: false,
@@ -417,7 +434,6 @@ export const mockOrders: PlacedOrder[] = [
     deliveryFrom: '08:00',
     deliveryTo: '12:00',
     paymentMethod: 'Contado',
-    orderType: 'Normal',
     remote: false,
     status: 'entregado',
     synced: true,
@@ -436,7 +452,6 @@ export const mockOrders: PlacedOrder[] = [
     deliveryFrom: '14:00',
     deliveryTo: '16:00',
     paymentMethod: 'Pronto pago',
-    orderType: 'Normal',
     remote: false,
     status: 'entregado',
     synced: true,

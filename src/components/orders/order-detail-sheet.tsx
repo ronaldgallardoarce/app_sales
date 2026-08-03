@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
+import { CancelOrderSheet } from '@/components/orders/cancel-order-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { Icon, type IconName } from '@/components/ui/icon';
@@ -7,12 +9,13 @@ import { ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { deliveryDateLabel } from '@/data/mock-order-details';
 // ORDER_STATUS_META goes with the commented-out status pill below.
 import {
-  canDeleteOrder,
+  canAnnulOrder,
   canEditOrder,
   CHANGE_WINDOW_HOURS,
   changeTimeLeftLabel,
   editBlockedReason,
   orderNumberLabel,
+  type CancelReason,
   type PlacedOrder,
 } from '@/data/mock-orders';
 import { useTheme } from '@/hooks/use-theme';
@@ -31,14 +34,15 @@ export function OrderDetailSheet({
   order,
   onClose,
   onEdit,
-  onDelete,
+  onAnnul,
   onShowSummary,
 }: {
   /** Null keeps the sheet closed; a value opens it on that order. */
   order: PlacedOrder | null;
   onClose: () => void;
   onEdit: () => void;
-  onDelete: () => void;
+  /** Withdraw the order on the grounds the seller picked in the sheet this one raises. */
+  onAnnul: (reason: CancelReason) => void;
   /**
    * Opens the shareable summary. Raised to the screen rather than owned here because this sheet
    * unmounts with the order it is showing, and a summary nested inside would be torn down with it
@@ -47,6 +51,17 @@ export function OrderDetailSheet({
   onShowSummary: () => void;
 }) {
   const theme = useTheme();
+  const [cancelVisible, setCancelVisible] = useState(false);
+
+  /**
+   * Cleared by hand, because this component is not unmounted between orders: the screens keep it
+   * rendered with `order: null` while it is closed, so the flag would still be standing the next
+   * time one is opened and the annul sheet would come up over an order nobody asked to withdraw.
+   */
+  useEffect(() => {
+    if (!order) setCancelVisible(false);
+  }, [order]);
+
   if (!order) return null;
 
   // const meta = ORDER_STATUS_META[order.status]; // with the status pill below
@@ -61,7 +76,7 @@ export function OrderDetailSheet({
    * shown on the list rows; not worth one for a sheet that is open for seconds at a time.
    */
   const editable = canEditOrder(order);
-  const deletable = canDeleteOrder(order);
+  const annullable = canAnnulOrder(order);
   const blocked = editBlockedReason(order);
   const timeLeft = changeTimeLeftLabel(order);
 
@@ -82,6 +97,27 @@ export function OrderDetailSheet({
             <ThemedText style={[styles.statusText, { color: theme[meta.color] }]}>{meta.label}</ThemedText>
           </View>
           */}
+
+          {/* Up here and not down with the buttons, because it is not one of them: editing and
+              annulling change the order and are both governed by the two-hour window, while this
+              only reads it back — and reading is never blocked, so an order the seller can no
+              longer touch is exactly the one they are most likely to be asked to show a client.
+              Sharing a row with the other two made it look like a third way to alter the order,
+              and it took width from the one button that actually does. */}
+          <Pressable
+            onPress={onShowSummary}
+            style={[styles.summaryButton, { backgroundColor: theme.accentSoft }]}>
+            {/* "Compartir" and the share glyph rather than naming the document: what the seller
+                comes here to do is send the order to the client — PDF, image or WhatsApp — and the
+                summary is what they end up looking at on the way. */}
+            <Icon name="share" size={14} color={theme.accent} />
+            <ThemedText
+              type="smallBold"
+              numberOfLines={1}
+              style={[styles.summaryLabel, { color: theme.accent }]}>
+              Compartir
+            </ThemedText>
+          </Pressable>
         </View>
 
         {/* Sync notice hidden for now, by request. The `synced` flag is still on the order, so
@@ -105,13 +141,22 @@ export function OrderDetailSheet({
             value={`${deliveryDateLabel(order.deliveryDate)}, ${order.deliveryFrom} a ${order.deliveryTo}`}
           />
           <FactRow icon="cash" label="Pago" value={order.paymentMethod} />
-          <FactRow icon="tag.fill" label="Tipo" value={order.orderType} />
           <FactRow
             icon={order.remote ? 'smartphone' : 'store'}
             label="Modalidad"
             value={order.remote ? 'Pedido remoto' : 'Pedido presencial'}
             tone={order.remote ? theme.violet : undefined}
           />
+          {/* Only on an annulled order, and in danger red: this is the fact that overrides every
+              other one in the block — the delivery it names is not happening. */}
+          {order.cancelReason ? (
+            <FactRow
+              icon="xmark.circle.fill"
+              label="Anulado por"
+              value={order.cancelReason}
+              tone={theme.danger}
+            />
+          ) : null}
         </View>
 
         <SectionLabel>Productos</SectionLabel>
@@ -188,12 +233,12 @@ export function OrderDetailSheet({
         </View>
 
         {/* Editing closes a couple of hours after the order was taken, and for good the first time
-            it is used; deleting closes on the same clock, minus the one-use half. Both buttons stay
+            it is used; annulling closes on the same clock, minus the one-use half. Both buttons stay
             visible once they close rather than disappearing: a seller who cannot find one does not
             know whether the feature is missing or the door is shut, so the edit button says which —
             and names which of the two rules shut it, because "you already edited this" and "you took
-            too long" are different conversations with the office. The trash carries no label to say
-            it with, so its reason lives in the line below. */}
+            too long" are different conversations with the office. The annul button carries no label
+            to say it with, so its reason lives in the line below. */}
         <View style={styles.actions}>
           <Pressable
             disabled={!editable}
@@ -214,42 +259,49 @@ export function OrderDetailSheet({
             </ThemedText>
           </Pressable>
 
-          {/* Never disabled, unlike the two beside it: reading an order back or sending it to the
-              client is not a change to it, so neither the edit window nor the one-edit rule has
-              anything to say about it. An order the seller can no longer touch is exactly the one
-              they are most likely to be asked to read out. */}
+          {/* An X and not a trash can: the order is not being thrown away. It stays on the list,
+              marked and carrying the reason it was withdrawn — a bin would promise the seller it
+              disappears. */}
           <Pressable
-            onPress={onShowSummary}
-            style={[styles.deleteButton, { backgroundColor: theme.accentSoft }]}>
-            <Icon name="doc.text" size={15} color={theme.accent} />
-          </Pressable>
-
-          <Pressable
-            disabled={!deletable}
-            onPress={onDelete}
+            disabled={!annullable}
+            onPress={() => setCancelVisible(true)}
             style={[
               styles.deleteButton,
               {
-                backgroundColor: deletable ? theme.dangerSoft : theme.backgroundSelected,
-                opacity: deletable ? 1 : 0.7,
+                backgroundColor: annullable ? theme.dangerSoft : theme.backgroundSelected,
+                opacity: annullable ? 1 : 0.7,
               },
             ]}>
-            <Icon name="trash" size={15} color={deletable ? theme.danger : theme.textSecondary} />
+            <Icon name="xmark" size={15} color={annullable ? theme.danger : theme.textSecondary} />
           </Pressable>
         </View>
 
         <ThemedText themeColor="textSecondary" style={styles.editHint}>
           {/* The one-edit rule is said before it bites, not only after: a seller who knows this is
               their only pass makes it count, and finding out afterwards is finding out too late.
-              An order that spent its edit is still deletable, so that middle case says what is
-              left rather than reading as if the whole order had closed. */}
-          {editable
-            ? `Se puede editar una sola vez o eliminar, por ${timeLeft} más.`
-            : deletable
-              ? `Este pedido ya se editó. Se puede eliminar por ${timeLeft} más.`
-              : `Los pedidos se editan o eliminan dentro de las ${CHANGE_WINDOW_HOURS} horas de creados.`}
+              An order that spent its edit can still be annulled, so that middle case says what is
+              left rather than reading as if the whole order had closed. An already annulled one
+              says so first — for that order neither clock means anything any more. */}
+          {order.status === 'anulado'
+            ? 'Este pedido está anulado.'
+            : editable
+              ? `Se puede editar una sola vez o anular, por ${timeLeft} más.`
+              : annullable
+                ? `Este pedido ya se editó. Se puede anular por ${timeLeft} más.`
+                : `Los pedidos se editan o anulan dentro de las ${CHANGE_WINDOW_HOURS} horas de creados.`}
         </ThemedText>
       </ScrollView>
+
+      {/* Nested inside this sheet's tree rather than raised beside it — see the note on the
+          component. Reachable only through the button above, which is closed once the order is
+          already annulled. */}
+      <CancelOrderSheet
+        visible={cancelVisible}
+        onClose={() => setCancelVisible(false)}
+        orderId={order.id}
+        clientName={`${order.clientCode}-${order.clientName}`}
+        onConfirm={onAnnul}
+      />
     </BottomSheet>
   );
 }
@@ -327,6 +379,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '600',
+  },
+  // A pill in the header, not a button in the action row: same height as the order number beside
+  // it, and it never grows — the client name below is what takes the width.
+  summaryButton: {
+    flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 5,
+    borderRadius: Radius.pill,
+  },
+  summaryLabel: {
+    fontSize: 12,
+    lineHeight: 16,
   },
   statusPill: {
     flexShrink: 0,
@@ -455,8 +522,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
-  // Square and unlabelled beside the wide edit button: destroying the order should not be as
-  // easy to hit as amending it, and the trash glyph carries the meaning on its own.
+  // Square and unlabelled beside the wide edit button: withdrawing the order should not be as
+  // easy to hit as amending it. Now the only thing sharing that row with the edit button.
   deleteButton: {
     width: ControlHeight.input,
     height: ControlHeight.input,

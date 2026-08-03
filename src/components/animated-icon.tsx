@@ -10,9 +10,12 @@ import { useThemeScheme } from '@/hooks/use-theme';
 const INITIAL_SCALE_FACTOR = Dimensions.get('screen').height / 90;
 const DURATION = 600;
 
+// The overlay picks up where the native splash leaves off, so its background has to be
+// the exact navy of the deal artwork (and of `expo-splash-screen`'s backgroundColor) —
+// same value in both schemes, otherwise the handoff flashes.
 const SplashColors = {
-  light: { gradientStart: '#3C9FFE', gradientEnd: '#0274DF', overlay: '#208AEF' },
-  dark: { gradientStart: '#1F6FD1', gradientEnd: '#043E8F', overlay: '#123B73' },
+  light: { gradientStart: '#3C9FFE', gradientEnd: '#0274DF', overlay: '#1C2747' },
+  dark: { gradientStart: '#1F6FD1', gradientEnd: '#043E8F', overlay: '#1C2747' },
 } as const;
 
 export function AnimatedSplashOverlay() {
@@ -41,7 +44,7 @@ export function AnimatedSplashOverlay() {
     },
   });
 
-  const image = <Image style={styles.image} source={require('@/assets/images/expo-logo.png')} />;
+  const image = <Image style={styles.splashImage} source={require('@/assets/images/deal-splash.png')} />;
   const overlayStyle = [styles.splashOverlay, { backgroundColor: SplashColors[scheme].overlay }];
 
   return animate ? (
@@ -151,6 +154,11 @@ const styles = StyleSheet.create({
     width: 128,
     height: 128,
     position: 'absolute',
+  },
+  // Matches the native splash: 200dp wide, at the artwork's 744x1060 aspect ratio.
+  splashImage: {
+    width: 200,
+    height: 285,
   },
   splashOverlay: {
     ...StyleSheet.absoluteFillObject,

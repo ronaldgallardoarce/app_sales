@@ -401,21 +401,32 @@ export default function CatalogScreen() {
               </Pressable>
             ) : null}
           </View>
-          {/* Filter entry point. It carries the accent while a category is applied,
-              so an active filter is visible even before reading the chip below. */}
+          {/* Filter entry point, and it says what it filters by. As a bare glyph in a neutral box
+              it was indistinguishable from the search field beside it and nothing on screen named
+              the categories at all — the seller had to tap it to find out it was there. The word
+              plus the accent is what makes it read as an offer instead of as an ornament.
+
+              Filled accent once a category is applied, soft accent while none is: the state is
+              visible before reading the chip below, and the button never goes fully quiet. */}
           <Pressable
             onPress={() => setCategoriesVisible(true)}
             style={[
               styles.filterButton,
               categoryFilter
                 ? { backgroundColor: theme.accent, borderColor: theme.accent }
-                : { backgroundColor: theme.backgroundElement, borderColor: theme.border },
+                : { backgroundColor: theme.accentSoft, borderColor: theme.accent },
             ]}>
             <Icon
               name="line.3.horizontal.decrease"
               size={15}
-              color={categoryFilter ? theme.onAccent : theme.text}
+              color={categoryFilter ? theme.onAccent : theme.accent}
             />
+            <ThemedText
+              type="smallBold"
+              numberOfLines={1}
+              style={[styles.filterButtonText, { color: categoryFilter ? theme.onAccent : theme.accent }]}>
+              Categoría
+            </ThemedText>
           </Pressable>
         </View>
 
@@ -620,13 +631,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     paddingVertical: 0,
   },
+  // Sized by its label rather than square, and never squeezed: the search field beside it is the
+  // one that gives up width on a narrow screen.
   filterButton: {
-    width: ControlHeight.input,
-    height: ControlHeight.input,
-    borderRadius: Radius.md,
-    borderWidth: 1,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
+    gap: 6,
+    height: ControlHeight.input,
+    paddingHorizontal: Spacing.two,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+  },
+  filterButtonText: {
+    fontSize: 12,
+    lineHeight: 16,
   },
   filterChipRow: {
     flexDirection: 'row',

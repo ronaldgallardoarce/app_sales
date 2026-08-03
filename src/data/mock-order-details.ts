@@ -12,10 +12,6 @@ export function deliveryPointLabel(point: DeliveryPoint): string {
   return `${point.code} - ${point.name}`;
 }
 
-/** How the order is classified commercially. */
-export const ORDER_TYPES = ['Normal', 'Licitación'] as const;
-export type OrderType = (typeof ORDER_TYPES)[number];
-
 /** Order-time client data: who to invoice, where to deliver, who to ask for. */
 export type OrderClientDetails = {
   nit: string;

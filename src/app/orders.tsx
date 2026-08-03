@@ -54,7 +54,7 @@ export default function OrdersScreen() {
   const { orders: allOrders } = useOrders();
   const { showSummary } = useOrderSummary();
   // Shared with the client screen, which opens the same sheet on the same orders.
-  const { startEdit, confirmDelete } = useOrderActions();
+  const { startEdit, annulOrder } = useOrderActions();
 
   const orders = useMemo(() => filterOrders(allOrders, filters), [allOrders, filters]);
   const summary = useMemo(() => summariseOrders(orders), [orders]);
@@ -225,7 +225,7 @@ export default function OrdersScreen() {
         onClose={() => setOpenOrderId(null)}
         onEdit={() => openOrder && startEdit(openOrder, () => setOpenOrderId(null))}
         // Closes the sheet as well: it was showing the order that just stopped existing.
-        onDelete={() => openOrder && confirmDelete(openOrder, () => setOpenOrderId(null))}
+        onAnnul={(reason) => openOrder && annulOrder(openOrder, reason, () => setOpenOrderId(null))}
         // Snapshots the order into the summary screen before closing: the summary is a document
         // being read aloud, and it should survive the list changing underneath it.
         onShowSummary={() => {

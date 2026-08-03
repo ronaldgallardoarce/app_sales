@@ -7,7 +7,7 @@ import { VisitTimer } from '@/components/client/visit-timer';
 import { DeliveryPointSheet } from '@/components/order/delivery-point-sheet';
 import { DeliveryWindowSheet } from '@/components/order/delivery-window-sheet';
 import { GiftProductSheet } from '@/components/order/gift-product-sheet';
-import { DatePickerDialog } from '@/components/ui/date-picker';
+import { DateInputField, formatDateInput, parseDateInput } from '@/components/ui/date-input-field';
 import { ThemedText } from '@/components/themed-text';
 import { useDialog } from '@/components/ui/dialog';
 import { Icon, type IconName } from '@/components/ui/icon';
@@ -28,13 +28,9 @@ import {
   deliveryDateOptions,
   deliveryPointLabel,
   DELIVERY_WINDOWS,
-  deliveryWindowLabelFor,
-  deliveryWindowSpan,
   fromDateKey,
   orderDetailsFor,
-  ORDER_TYPES,
   toDateKey,
-  type OrderType,
 } from '@/data/mock-order-details';
 import { type OrderSummaryData } from '@/components/orders/order-summary-document';
 import { useContentInsets } from '@/hooks/use-content-insets';
@@ -96,7 +92,6 @@ export default function OrderConfirmScreen() {
    * changes only what moved. Lazy initialisers, evaluated once: after that these are the form's
    * own state, and re-deriving them would undo edits on every render.
    */
-  const [orderType, setOrderType] = useState<OrderType>(editing?.orderType ?? 'Normal');
   const [deliveryPointId, setDeliveryPointId] = useState<string | null>(null);
   const [pointSheetVisible, setPointSheetVisible] = useState(false);
   /** Which line's gift flavor is being chosen — the ordered product's id, or null when closed. */
@@ -104,7 +99,17 @@ export default function OrderConfirmScreen() {
   const [contact, setContact] = useState('');
   const [notes, setNotes] = useState('');
   const [deliveryDate, setDeliveryDate] = useState(() => editing?.deliveryDate ?? dateOptions[0].key);
-  const [dateSheetVisible, setDateSheetVisible] = useState(false);
+  /**
+   * The same day as `deliveryDate`, in the shape the typed field speaks: `DD/MM/AAAA`.
+   *
+   * Two states and not one derived from the other, because a half-typed date is a normal state of
+   * that field and `YYYY-MM-DD` has nowhere to put "31/0". This one is what the input shows; the
+   * committed `deliveryDate` above only moves once what was typed is a day that exists, so the
+   * order can never be carrying a date the seller was still in the middle of writing.
+   */
+  const [deliveryDateText, setDeliveryDateText] = useState(() =>
+    formatDateInput(fromDateKey(editing?.deliveryDate ?? dateOptions[0].key)),
+  );
   const [windowSheetVisible, setWindowSheetVisible] = useState(false);
   const [fromHour, setFromHour] = useState<string>(editing?.deliveryFrom ?? DELIVERY_WINDOWS[1].from);
   const [toHour, setToHour] = useState<string>(editing?.deliveryTo ?? DELIVERY_WINDOWS[1].to);
@@ -162,14 +167,6 @@ export default function OrderConfirmScreen() {
   const contactValue = contact || details?.contact || '';
 
   /**
-   * The hours read back the way they are spoken: the stretch of day they name and how long they
-   * last. Derived rather than looked up, so a range the seller built off the timeline reads as a
-   * window too instead of leaving the row with bare numbers and no name. No guard keeping the end
-   * after the start: the sheet cannot produce an inverted range.
-   */
-  const windowSummary = `${deliveryWindowLabelFor(fromHour, toHour)} · ${deliveryWindowSpan(fromHour, toHour)}`;
-
-  /**
    * The order as the document the client is shown. Built from the same figures that `placeOrder`
    * is about to store, so what the seller reads back before confirming is what gets registered —
    * not a second calculation that could disagree with it.
@@ -195,8 +192,22 @@ export default function OrderConfirmScreen() {
       }
     : null;
 
-  /** True when the date came from the calendar rather than from one of the quick chips. */
-  const customDate = !dateOptions.some((option) => option.key === deliveryDate);
+  /** A quick chip: it answers both halves at once, so the typed field reads back what was tapped. */
+  const pickDeliveryDate = (key: string) => {
+    setDeliveryDate(key);
+    setDeliveryDateText(formatDateInput(fromDateKey(key)));
+  };
+
+  /**
+   * A keystroke in the typed field. The text is kept whatever it says; the order's date only
+   * follows once it names a day that exists — until then the last committed one stands, which is
+   * what keeps a half-typed "12/0" from blanking the delivery the seller already agreed.
+   */
+  const typeDeliveryDate = (text: string) => {
+    setDeliveryDateText(text);
+    const parsed = parseDateInput(text);
+    if (parsed) setDeliveryDate(toDateKey(parsed));
+  };
 
   /**
    * Writes the amended order back over the one being edited.
@@ -214,7 +225,6 @@ export default function OrderConfirmScreen() {
       deliveryFrom: fromHour,
       deliveryTo: toHour,
       paymentMethod,
-      orderType,
       // Snapshotted for the same reason the cart was copied on the way in: the order must not
       // share a line array with a cart that is about to be emptied and refilled.
       lines: lines.map((line) => ({ ...line })),
@@ -260,7 +270,6 @@ export default function OrderConfirmScreen() {
       deliveryFrom: fromHour,
       deliveryTo: toHour,
       paymentMethod,
-      orderType,
       remote: isRemote,
       status: 'confirmado',
       // False the way a real one is: taken on the phone, sent when there is signal.
@@ -277,13 +286,16 @@ export default function OrderConfirmScreen() {
   };
 
   /**
-   * Stores the order (or the edit) and leaves the screen. `closeVisit` decides only whether the
-   * seller is done at this client — the order itself is recorded either way.
+   * Stores the order (or the edit) and leaves the screen.
+   *
+   * Confirming ends the visit it was taken in. The order is what the seller came to get, so the
+   * call is over once it is placed — there is no longer a choice to stay, and nothing else on
+   * this screen decides it.
    */
-  const settle = (closeVisit: boolean) => {
-    // Read before anything writes: `markOrder` below may close this very visit, and the
+  const settle = () => {
+    // Read before anything writes: `markOrder` below closes this very visit, and the
     // destination depends on whether the seller was in one when they confirmed.
-    const finishedVisit = closeVisit && !editing && clientId !== undefined && openVisitOf(clientId) !== null;
+    const finishedVisit = !editing && clientId !== undefined && openVisitOf(clientId) !== null;
 
     if (editing) {
       saveEdit();
@@ -291,8 +303,8 @@ export default function OrderConfirmScreen() {
       placeOrder();
       // Amending an order the client already placed is not a second sale, so it records nothing
       // against the visit. On a remote order there is no open visit and this only records the
-      // sale — `closeVisit` has nothing to close and is harmless.
-      if (clientId) markOrder(clientId, { closeVisit });
+      // sale — the close has nothing to close and is harmless.
+      if (clientId) markOrder(clientId, { closeVisit: true });
     }
 
     // Dropped alongside the lines, not after them: the reply is keyed by product code,
@@ -339,9 +351,10 @@ export default function OrderConfirmScreen() {
                 id: clientId,
                 // A remote order came through the reason picker, and that picker is spent: the
                 // client screen is still sitting on it underneath us, so without this the seller
-                // lands back on a form offering to start the order they just placed. A
-                // presencial order carries no reset — staying in the visit means staying on the
-                // in-visit menu, which is the step that screen already has open.
+                // lands back on a form offering to start the order they just placed. Remote is
+                // in practice the only kind of order that lands here at all now — an on-site one
+                // closes its visit above — but the guard stays, so this keeps landing on the
+                // client's menu rather than on the picker if that ever stops being true.
                 ...(isRemote ? { step: 'menu' } : {}),
               },
             } as Href)
@@ -351,14 +364,11 @@ export default function OrderConfirmScreen() {
 
   const confirm = () => {
     /**
-     * The choice only exists when there is a visit to keep open: an edit is office work and a
-     * remote order was never on site, so both keep the single acknowledgement they had.
-     *
-     * "Finalizar visita" is the primary because most calls do end with the order — but it is a
-     * choice and not an assumption, which is the whole point: the seller who still has a task to
-     * do says so here instead of having to check in a second time for it.
+     * Whether this confirmation also closes a visit — true for an on-site order and false for the
+     * two cases that were never in one: an edit is office work, and a remote order was taken off
+     * site. Only used to say so in the message; the action below is the same one either way.
      */
-    const canStayInVisit = !editing && clientId !== undefined && openVisitOf(clientId) !== null;
+    const closesVisit = !editing && clientId !== undefined && openVisitOf(clientId) !== null;
 
     dialog.show({
       icon: 'checkmark.circle.fill',
@@ -366,13 +376,13 @@ export default function OrderConfirmScreen() {
       title: editing ? 'Pedido actualizado' : 'Pedido confirmado',
       message: editing
         ? `Se guardaron los cambios del pedido ${orderNumberLabel(editing.id)}. Nuevo total: ${formatBs(finalTotal)}.`
-        : `Se registró el pedido ${orderNumberLabel(nextOrderId)} por ${formatBs(finalTotal)}.`,
-      actions: canStayInVisit
-        ? [
-            { label: 'Seguir en la visita', variant: 'outline', onPress: () => settle(false) },
-            { label: 'Finalizar visita', variant: 'primary', onPress: () => settle(true) },
-          ]
-        : [{ label: 'Listo', variant: 'primary', onPress: () => settle(true) }],
+        : `Se registró el pedido ${orderNumberLabel(nextOrderId)} por ${formatBs(finalTotal)}.${
+            // Stated rather than left to be discovered: the visit ends here now, and the seller
+            // finds out on the next screen otherwise.
+            closesVisit ? ' La visita quedó finalizada.' : ''
+          }`,
+      // One acknowledgement, no choice: the order closes the call.
+      actions: [{ label: 'Listo', variant: 'primary', onPress: settle }],
     });
   };
 
@@ -544,26 +554,6 @@ export default function OrderConfirmScreen() {
             <FieldRow icon="person.crop.circle" label="Razón social" value={details?.razonSocial ?? '—'} />
           </View>
 
-          <SectionLabel>Tipo de pedido</SectionLabel>
-          <View style={[styles.segment, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-            {ORDER_TYPES.map((type) => (
-              <Pressable
-                key={type}
-                onPress={() => setOrderType(type)}
-                style={[styles.segmentButton, orderType === type ? { backgroundColor: theme.accent } : null]}>
-                <ThemedText
-                  type="smallBold"
-                  numberOfLines={1}
-                  style={[
-                    styles.segmentText,
-                    { color: orderType === type ? theme.onAccent : theme.textSecondary },
-                  ]}>
-                  {type}
-                </ThemedText>
-              </Pressable>
-            ))}
-          </View>
-
           <SectionLabel>Punto de entrega</SectionLabel>
           {/* One row that opens a searchable sheet: a client can have many points, and
               listing them here would push the rest of the form off screen. */}
@@ -628,60 +618,56 @@ export default function OrderConfirmScreen() {
               <ThemedText themeColor="textSecondary" style={styles.fieldCaption}>
                 ¿Qué día se entrega?
               </ThemedText>
-              {/* Quick days on the left, calendar on the right — the same shape the tasks form
-                  uses for an expiry date, so the way to reach a calendar is one thing the seller
-                  learns once. */}
-              <View style={styles.dateRow}>
-                <View style={styles.dateChoices}>
-                  {dateOptions.map((option) => {
-                    const active = option.key === deliveryDate;
-                    return (
-                      <Pressable
-                        key={option.key}
-                        onPress={() => setDeliveryDate(option.key)}
-                        style={[
-                          styles.dateChip,
-                          {
-                            backgroundColor: active ? theme.accent : theme.background,
-                            borderColor: active ? theme.accent : theme.border,
-                          },
-                        ]}>
-                        <ThemedText
-                          type="smallBold"
-                          numberOfLines={1}
-                          style={[styles.dateChipText, { color: active ? theme.onAccent : theme.text }]}>
-                          {option.label}
-                        </ThemedText>
-                      </Pressable>
-                    );
-                  })}
-                </View>
+              {/* Three ways in, in the order they get used. The chips are one tap and cover almost
+                  every order; under them the date can be typed outright — eight digits off a
+                  delivery plan beat paging a calendar for a day three weeks out — and the calendar
+                  button beside the field is the third door, for the seller who would rather look
+                  at a month than count days.
 
-                <Pressable
-                  onPress={() => setDateSheetVisible(true)}
-                  style={[
-                    styles.dateButton,
-                    {
-                      backgroundColor: customDate ? theme.accentSoft : theme.background,
-                      borderColor: customDate ? theme.accent : theme.border,
-                    },
-                  ]}>
-                  <Icon name="calendar" size={17} color={theme.accent} />
-                </Pressable>
+                  The typed field is the same `DateInputField` the tasks and returns forms use, so
+                  a date is written the same way everywhere in the app: the same mask, the same
+                  rejection of `31/02`, the same calendar button on its right. */}
+              <View style={styles.dateChoices}>
+                {dateOptions.map((option) => {
+                  const active = option.key === deliveryDate;
+                  return (
+                    <Pressable
+                      key={option.key}
+                      onPress={() => pickDeliveryDate(option.key)}
+                      style={[
+                        styles.dateChip,
+                        {
+                          backgroundColor: active ? theme.accent : theme.background,
+                          borderColor: active ? theme.accent : theme.border,
+                        },
+                      ]}>
+                      <ThemedText
+                        type="smallBold"
+                        numberOfLines={1}
+                        style={[styles.dateChipText, { color: active ? theme.onAccent : theme.text }]}>
+                        {option.label}
+                      </ThemedText>
+                    </Pressable>
+                  );
+                })}
               </View>
-              {/* Spelled out underneath whichever way it was picked: "Hoy" is convenient but a
-                  weekday and a number is what gets repeated back to the client. */}
-              <ThemedText type="smallBold" numberOfLines={1} style={styles.deliveryReadback}>
-                {deliveryDateLabel(deliveryDate)}
-              </ThemedText>
+
+              {/* No spelled-out weekday underneath any more: the field itself now shows the date
+                  in full, and repeating it as prose one line below was the same answer twice. */}
+              <DateInputField
+                value={deliveryDateText}
+                onChange={typeDeliveryDate}
+                title="Fecha de entrega"
+              />
             </View>
 
             <View style={[styles.deliveryDivider, { borderTopColor: theme.border }]} />
 
-            {/* One row, one sheet. Inside it the usual windows are a chip each and anything else is
-                drawn on a timeline, so the row below can be any pair of hours — it always reads back
-                as a name and a duration all the same. The caption spells out whose hours these are —
-                as two bare "Desde"/"Hasta" chip rows it never said. */}
+            {/* One row, one sheet. The row shows the hours themselves and nothing else: the
+                window's name and how long it lasts — "Mañana · 4 h" — were a second line
+                restating what "08:00 a 12:00" already says, and stacked under the date field
+                above they turned the card into four lines of small print. Both still lead the
+                chips inside the sheet, which is where choosing actually happens. */}
             <View style={styles.deliveryField}>
               <ThemedText themeColor="textSecondary" style={styles.fieldCaption}>
                 ¿En qué horario recibe el cliente?
@@ -690,14 +676,9 @@ export default function OrderConfirmScreen() {
                 onPress={() => setWindowSheetVisible(true)}
                 style={[styles.selectRow, { backgroundColor: theme.background, borderColor: theme.border }]}>
                 <Icon name="clock.fill" size={15} color={theme.accent} />
-                <View style={styles.optionTexts}>
-                  <ThemedText type="smallBold" numberOfLines={1} style={styles.optionLabel}>
-                    {fromHour} a {toHour}
-                  </ThemedText>
-                  <ThemedText themeColor="textSecondary" numberOfLines={1} style={styles.metaLabel}>
-                    {windowSummary}
-                  </ThemedText>
-                </View>
+                <ThemedText type="smallBold" numberOfLines={1} style={styles.windowValue}>
+                  {fromHour} a {toHour}
+                </ThemedText>
                 <Icon name="chevron.down" size={13} color={theme.textSecondary} />
               </Pressable>
             </View>
@@ -746,50 +727,59 @@ export default function OrderConfirmScreen() {
           * second half and confirm from there — what they cannot do is confirm having never
           * looked at it.
           */}
-        {/* The document beside the action that commits it: reading the order back to the client is
-            the last thing that happens before confirming, so it belongs in the same row rather
-            than somewhere up the form the seller has already scrolled past. Icon only — the
-            primary action keeps the words and the width. */}
-        <View style={styles.actionRow}>
-          <Pressable
-            disabled={lines.length === 0}
-            onPress={() => summaryData && showSummary(summaryData)}
-            style={[
-              styles.summaryButton,
-              {
-                backgroundColor: theme.backgroundElement,
-                borderColor: theme.border,
-                opacity: lines.length === 0 ? 0.4 : 1,
-              },
-            ]}>
-            <Icon name="doc.text" size={17} color={theme.accent} />
-          </Pressable>
+        {/* Reading the order back to the client is the last thing that happens before confirming,
+            so the document stays in the footer — but above the action and not beside it.
 
-          {tab === 'items' ? (
-            <Pressable
-              onPress={() => showTab('details')}
-              style={[styles.confirmButton, styles.actionGrow, { backgroundColor: theme.accent }]}>
-              <ThemedText type="smallBold" style={{ color: theme.onAccent }}>
-                Continuar · {formatBs(finalTotal)}
-              </ThemedText>
-              <Icon name="chevron.right" size={16} color={theme.onAccent} />
-            </Pressable>
-          ) : (
-            <Pressable
-              disabled={confirmDisabled}
-              onPress={confirm}
-              style={[
-                styles.confirmButton,
-                styles.actionGrow,
-                { backgroundColor: theme.success, opacity: confirmDisabled ? 0.4 : 1 },
-              ]}>
-              <Icon name={editing ? 'checkmark' : 'cart'} size={16} color={theme.onSuccess} />
-              <ThemedText type="smallBold" style={{ color: theme.onSuccess }}>
-                {editing ? 'Guardar cambios' : 'Confirmar pedido'} · {formatBs(finalTotal)}
-              </ThemedText>
-            </Pressable>
-          )}
-        </View>
+            As a bare square sharing the row it was two problems at once: a lone `doc.text` glyph
+            names nothing, so the only way to learn what it did was to press it and find out; and
+            it took a quarter of the row from the one control the seller is actually looking for.
+            Now it says what it is, and it is quiet — outlined, a row rather than a button — so the
+            filled action underneath it stays the only thing in the footer that reads as the way
+            forward. */}
+        <Pressable
+          disabled={lines.length === 0}
+          onPress={() => summaryData && showSummary(summaryData)}
+          style={[
+            styles.summaryButton,
+            {
+              backgroundColor: theme.backgroundElement,
+              borderColor: theme.border,
+              opacity: lines.length === 0 ? 0.4 : 1,
+            },
+          ]}>
+          <Icon name="doc.text" size={15} color={theme.accent} />
+          <ThemedText
+            type="smallBold"
+            numberOfLines={1}
+            style={[styles.summaryLabel, { color: theme.accent }]}>
+            Ver y compartir resumen
+          </ThemedText>
+          <Icon name="chevron.right" size={13} color={theme.accent} />
+        </Pressable>
+
+        {tab === 'items' ? (
+          <Pressable
+            onPress={() => showTab('details')}
+            style={[styles.confirmButton, { backgroundColor: theme.accent }]}>
+            <ThemedText type="smallBold" style={{ color: theme.onAccent }}>
+              Continuar · {formatBs(finalTotal)}
+            </ThemedText>
+            <Icon name="chevron.right" size={16} color={theme.onAccent} />
+          </Pressable>
+        ) : (
+          <Pressable
+            disabled={confirmDisabled}
+            onPress={confirm}
+            style={[
+              styles.confirmButton,
+              { backgroundColor: theme.success, opacity: confirmDisabled ? 0.4 : 1 },
+            ]}>
+            <Icon name={editing ? 'checkmark' : 'cart'} size={16} color={theme.onSuccess} />
+            <ThemedText type="smallBold" style={{ color: theme.onSuccess }}>
+              {editing ? 'Guardar cambios' : 'Confirmar pedido'} · {formatBs(finalTotal)}
+            </ThemedText>
+          </Pressable>
+        )}
       </View>
 
       <DeliveryPointSheet
@@ -798,17 +788,6 @@ export default function OrderConfirmScreen() {
         points={details?.deliveryPoints ?? []}
         selectedId={selectedPointId}
         onSelect={(point) => setDeliveryPointId(point.id)}
-      />
-
-      {/* The same calendar the tasks form uses, so a date is picked the same way everywhere in
-          the app. No minimum date: a delivery is always ahead, but the mock clock is not the
-          seller's, and blocking today would be the more confusing failure. */}
-      <DatePickerDialog
-        visible={dateSheetVisible}
-        value={fromDateKey(deliveryDate)}
-        title="Fecha de entrega"
-        onSelect={(date) => setDeliveryDate(toDateKey(date))}
-        onClose={() => setDateSheetVisible(false)}
       />
 
       <DeliveryWindowSheet
@@ -1297,23 +1276,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'right',
   },
-  segment: {
-    flexDirection: 'row',
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    padding: 3,
-    gap: 3,
-  },
-  segmentButton: {
-    flex: 1,
-    height: ControlHeight.segment,
-    borderRadius: Radius.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  segmentText: {
-    fontSize: 12,
-  },
   selectRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1355,25 +1317,10 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 15,
   },
-  dateRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-  },
   dateChoices: {
-    flex: 1,
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 5,
-  },
-  // Square, and the same side and size as the tasks form's calendar button.
-  dateButton: {
-    width: ControlHeight.input,
-    height: ControlHeight.input,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   dateChip: {
     flexDirection: 'row',
@@ -1388,10 +1335,10 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 15,
   },
-  deliveryReadback: {
-    fontSize: 12,
-    lineHeight: 16,
-    textTransform: 'capitalize',
+  windowValue: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 17,
   },
   deliveryDivider: {
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -1405,22 +1352,21 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     marginTop: Spacing.two,
   },
-  actionRow: {
+  // Deliberately shorter than the action below it: same width, less presence.
+  summaryButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
-  },
-  actionGrow: {
-    flex: 1,
-  },
-  summaryButton: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: ControlHeight.input,
-    height: ControlHeight.input,
+    height: 34,
+    paddingHorizontal: Spacing.two,
     borderRadius: Radius.md,
     borderWidth: 1,
     marginTop: Spacing.two,
+  },
+  summaryLabel: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 16,
   },
   // Same idiom as the order panel's notices, so a blocked action reads the same
   // wherever the seller meets it.

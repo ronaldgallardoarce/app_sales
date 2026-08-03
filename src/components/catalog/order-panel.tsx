@@ -1,14 +1,15 @@
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
+import { PaymentMethodSheet } from '@/components/order/payment-method-sheet';
 import { useDialog } from '@/components/ui/dialog';
 import { Icon } from '@/components/ui/icon';
 import { ThemedText } from '@/components/themed-text';
-import { ControlHeight, Radius, Spacing } from '@/constants/theme';
+import { ControlHeight, FloatingShadow, Radius, Spacing } from '@/constants/theme';
 import { useCart } from '@/context/cart-context';
 import { useConnectivity } from '@/context/connectivity-context';
 import { useOrderIncentives } from '@/context/order-incentives-context';
-import { PAYMENT_METHODS, type PaymentMethod } from '@/data/mock-incentives';
+import { type PaymentMethod } from '@/data/mock-incentives';
 import { useTheme } from '@/hooks/use-theme';
 import type { CartLine } from '@/types/catalog';
 import { lineAmount, lineIce, lineQtyDetail } from '@/utils/order';
@@ -35,6 +36,7 @@ export function OrderPanel({
   const { offline } = useConnectivity();
   const { status, request, reset: resetIncentives } = useOrderIncentives();
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Contado');
+  const [paymentSheetVisible, setPaymentSheetVisible] = useState(false);
 
   const emptyCart = lines.length === 0;
   // Discounts and bonifications are resolved server-side, so there is nothing to
@@ -192,24 +194,19 @@ export function OrderPanel({
 
       <View style={[styles.section, { borderTopColor: theme.border }]}>
         <ThemedText type="smallBold">Método de pago</ThemedText>
-        <View style={[styles.segment, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-          {PAYMENT_METHODS.map((method) => {
-            const active = method === paymentMethod;
-            return (
-              <Pressable
-                key={method}
-                onPress={() => setPaymentMethod(method)}
-                style={[styles.segmentButton, active ? { backgroundColor: theme.accent } : null]}>
-                <ThemedText
-                  type="smallBold"
-                  numberOfLines={1}
-                  style={[styles.segmentText, { color: active ? theme.onAccent : theme.textSecondary }]}>
-                  {method}
-                </ThemedText>
-              </Pressable>
-            );
-          })}
-        </View>
+        {/* One row that opens a sheet, the same shape the confirm screen gives the delivery point:
+            the terms come from the backend, so there can be more than the two that once fitted
+            side by side as a segmented control. The row states the current choice and stays one
+            line however long that list turns out to be. */}
+        <Pressable
+          onPress={() => setPaymentSheetVisible(true)}
+          style={[styles.selectRow, { backgroundColor: theme.background, borderColor: theme.accent }]}>
+          <Icon name="cash" size={15} color={theme.accent} />
+          <ThemedText type="smallBold" numberOfLines={1} style={styles.selectValue}>
+            {paymentMethod}
+          </ThemedText>
+          <Icon name="chevron.down" size={13} color={theme.textSecondary} />
+        </Pressable>
 
         {paymentMethod === 'Pronto pago' ? (
           <View style={[styles.notice, { backgroundColor: theme.accentAltSoft }]}>
@@ -235,28 +232,46 @@ export function OrderPanel({
       {/* Discounts and free goods are the pricing service's answer, so this button waits for
           it rather than navigating straight on: the summary is only worth opening once there
           is something to summarise. Nothing here commits the order — that is still the
-          summary screen's job. */}
+          summary screen's job.
+
+          The one way out of this panel, and it used to be the same height and weight as the
+          "Guardar prepedido" button under it, so the step that carries the order forward and the
+          step that parks it read as a pair of equals. It is now taller, raised off the panel by
+          its own shadow and led by a glyph in a filled circle — the only control here that looks
+          like the way on. Its accent is the app's primary action colour and not the green of
+          "Confirmar pedido": this one advances, it does not commit. */}
       <Pressable
         disabled={continueDisabled || pricing}
         onPress={handleApplyIncentives}
         style={[
           styles.continueButton,
-          { backgroundColor: theme.accent, opacity: continueDisabled || pricing ? 0.4 : 1 },
+          FloatingShadow,
+          {
+            backgroundColor: theme.accent,
+            // Tinted rather than the shadow's default near-black: it reads as the button's own
+            // glow instead of as a card lifting off the panel.
+            shadowColor: theme.accent,
+            opacity: continueDisabled || pricing ? 0.4 : 1,
+          },
         ]}>
         {pricing ? (
           <>
             <ActivityIndicator size="small" color={theme.onAccent} />
-            <ThemedText type="smallBold" style={[styles.buttonLabel, { color: theme.onAccent }]}>
+            <ThemedText type="smallBold" style={[styles.continueLabel, { color: theme.onAccent }]}>
               Consultando descuentos…
             </ThemedText>
           </>
         ) : (
           <>
-            <Icon name="cash" size={15} color={theme.onAccent} />
-            <ThemedText type="smallBold" style={[styles.buttonLabel, { color: theme.onAccent }]}>
+            <View style={[styles.continueGlyph, { backgroundColor: theme.onAccent }]}>
+              <Icon name="cash" size={16} color={theme.accent} />
+            </View>
+            {/* Wraps rather than truncating: the label is the whole reason the button is
+                unmistakable, and "Aplicar descuentos y bonificac…" would undo that. */}
+            <ThemedText type="smallBold" style={[styles.continueLabel, { color: theme.onAccent }]}>
               Aplicar descuentos y bonificaciones
             </ThemedText>
-            <Icon name="chevron.right" size={15} color={theme.onAccent} />
+            <Icon name="chevron.right" size={16} color={theme.onAccent} />
           </>
         )}
       </Pressable>
@@ -288,6 +303,14 @@ export function OrderPanel({
           Guardar prepedido
         </ThemedText>
       </Pressable>
+
+      {/* A `Modal` underneath, so where it sits in this list changes nothing about the layout. */}
+      <PaymentMethodSheet
+        visible={paymentSheetVisible}
+        onClose={() => setPaymentSheetVisible(false)}
+        selected={paymentMethod}
+        onSelect={setPaymentMethod}
+      />
     </ScrollView>
   );
 }
@@ -377,22 +400,21 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.three,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  segment: {
+  // Accent border, matching the way the rest of the app marks a field that is already filled —
+  // and this one always is, since the order opens on "Contado".
+  selectRow: {
     flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    height: ControlHeight.input,
     borderRadius: Radius.md,
     borderWidth: 1,
-    padding: 3,
-    gap: 3,
+    paddingHorizontal: Spacing.two,
   },
-  segmentButton: {
+  selectValue: {
     flex: 1,
-    height: ControlHeight.segment,
-    borderRadius: Radius.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  segmentText: {
-    fontSize: 12,
+    fontSize: 13,
+    lineHeight: 17,
   },
   notice: {
     flexDirection: 'row',
@@ -407,14 +429,30 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     fontWeight: '600',
   },
+  // No fixed height: the label wraps on a narrow screen, and the button grows with it.
   continueButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    height: ControlHeight.input,
+    gap: Spacing.two,
+    minHeight: 52,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.one,
     borderRadius: Radius.md,
     marginTop: Spacing.two,
+  },
+  continueGlyph: {
+    width: 28,
+    height: 28,
+    borderRadius: Radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  continueLabel: {
+    flexShrink: 1,
+    fontSize: 13,
+    lineHeight: 17,
   },
   clearButton: {
     flexDirection: 'row',
