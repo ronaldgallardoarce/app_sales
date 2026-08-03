@@ -12,6 +12,9 @@ de cargarlos: la tarea se completa con uno y los demás se pierden.
 El objetivo es que una tarea de baja rotación acepte N productos, cada uno con la misma
 estructura que hoy tiene el registro único — producto, vencimiento, lote, cantidad y fotos.
 
+Junto con eso, el lote pasa a ser dos datos y no uno: el depósito de origen (el select actual,
+`SC` / `LP`) y el número de lote impreso en el paquete, que hoy no se registra en ningún lado.
+
 ## Estado actual
 
 - `src/components/client/low-rotation-form.tsx` exporta `LowRotationValue`
@@ -38,7 +41,11 @@ export type LowRotationEntry = {
   /** String tipeado DD/MM/AAAA, no `Date`: el campo es una máscara y un valor a medio
    *  tipear es un estado intermedio normal. */
   expiry: string;
+  /** Depósito de origen. El select de siempre. */
   lot: LotCode | null;
+  /** Número de lote impreso en el paquete. Texto libre: lo define el fabricante, no el
+   *  depósito, y no hay lista posible contra la cual validarlo. */
+  lotNumber: string;
   qty: number;
   /** Hasta 3, sólo cámara. Se mueve acá desde `draft.photos`. */
   photos: string[];
@@ -95,7 +102,8 @@ renderiza:
 
 - Estado vacío: ícono, "Sin productos cargados" y la indicación de agregar el primero.
 - Una tarjeta por registro: `código-nombre` del producto (una línea, truncada), fila
-  secundaria `Vto DD/MM/AA · LOTE · Nu`, contador de fotos, y las acciones editar y eliminar.
+  secundaria `Vto 12/09/26 · SC L-2481 · 8u` — depósito y número de lote juntos, separados por
+  un espacio —, contador de fotos, y las acciones editar y eliminar.
 - Chip ámbar **"Duplicado"** en las tarjetas que lo sean (ver abajo).
 - Botón "Agregar producto" al pie.
 
@@ -107,10 +115,25 @@ del registro, así que se maneja con el mismo `onChange` de patch que el resto d
 Además exporta dos funciones nuevas:
 
 - `isLowRotationEntryComplete(entry): boolean` — producto elegido, vencimiento válido según
-  `isExpiryValid` (la verificación estricta, la que rechaza `31/02`), lote elegido,
-  cantidad > 0 y al menos una foto. Es la que habilita "Guardar producto".
+  `isExpiryValid` (la verificación estricta, la que rechaza `31/02`), depósito elegido, número
+  de lote no vacío, cantidad > 0 y al menos una foto. Es la que habilita "Guardar producto".
 - `duplicateIds(entries): Set<string>` — los ids de los registros que comparten producto,
-  lote y vencimiento con algún otro. Se calcula con `useMemo` en la lista.
+  depósito, número de lote y vencimiento con algún otro. El número de lote entra en la
+  comparación normalizado (mayúsculas y sin espacios en los extremos), igual que se guarda.
+  Se calcula con `useMemo` en la lista.
+
+### Campo lote
+
+Una fila con el `Select` actual y un `TextInput` al lado: el select toma el ancho que necesita
+para su contenido y el input ocupa el resto (`flex: 1`), porque `SC` / `LP` son dos caracteres
+y el número de lote puede tener diez.
+
+Bajo el mismo rótulo `LOTE`, cada control se explica con su placeholder: "Depósito" en el
+select, "N° de lote" en el input. Dos rótulos chicos debajo de los controles dirían lo mismo
+ocupando otra línea del sheet.
+
+El input usa `autoCapitalize="characters"` — los lotes se imprimen en mayúsculas — y se guarda
+con `trim()`. No se limita el largo ni se valida el formato: lo define cada fabricante.
 
 Un duplicado es sólo un aviso visual: no bloquea guardar ni completar la tarea. Un mismo
 producto puede aparecer legítimamente dos veces con distinto lote o vencimiento; lo que el
@@ -133,9 +156,14 @@ sólo si queda algún consumidor; si no, se elimina.
 
 - `RESPONSE_META['baja-rotacion'].hint` pasa a: "Registrá cada producto de baja rotación con
   su vencimiento, lote, cantidad y fotos." — en plural, porque ahora son varios.
+- El rótulo `Lote` del formulario ya no nombra un solo control; los dos placeholders
+  ("Depósito", "N° de lote") son los que distinguen qué va en cada uno.
 - El resto de los textos de la tarea (`title`, `description` en `mock-tasks.ts`) pasan al
   plural en la tarea `t-chan-trad-baja-rotacion`: "Registrá los productos con baja rotación
   detectados en el punto de venta."
+- El comentario de `LotCode` en `mock-tasks.ts` dice que esos códigos son lo que está impreso
+  en el paquete. Deja de ser cierto: lo impreso es el número de lote nuevo, y `SC` / `LP` son
+  el depósito de origen. Se corrige junto con el cambio.
 
 ## Verificación
 
@@ -144,12 +172,15 @@ la app:
 
 1. Abrir la tarea de baja rotación en un cliente del canal `tradicional`.
 2. Cargar dos productos distintos; confirmar que cada uno guarda sus propias fotos.
-3. Editar el primero y confirmar que volver atrás sin guardar descarta el cambio.
-4. Cargar el mismo producto con mismo lote y vencimiento; confirmar el chip "Duplicado" en
-   ambas tarjetas.
-5. Eliminar registros hasta vaciar la lista; confirmar que "Completar tarea" se bloquea en una
+3. Confirmar que "Guardar producto" sigue bloqueado con el depósito elegido pero el número de
+   lote vacío.
+4. Editar el primero y confirmar que volver atrás sin guardar descarta el cambio.
+5. Cargar el mismo producto con mismo depósito, mismo número de lote y mismo vencimiento;
+   confirmar el chip "Duplicado" en ambas tarjetas. Cambiarle el número de lote a uno de los
+   dos y confirmar que el chip desaparece.
+6. Eliminar registros hasta vaciar la lista; confirmar que "Completar tarea" se bloquea en una
    tarea obligatoria.
-6. Confirmar que las tareas de tipo `foto` siguen funcionando (no quedaron acopladas al cambio
+7. Confirmar que las tareas de tipo `foto` siguen funcionando (no quedaron acopladas al cambio
    de `draft.photos`).
 
 `expo lint` puede instalar dependencias por su cuenta; no se corre sin pedirlo antes.
