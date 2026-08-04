@@ -3,6 +3,7 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { QuantityStepper } from '@/components/product-detail/quantity-stepper';
 import { SuggestionCard } from '@/components/product-detail/suggestion-card';
+import { SuggestionStrip } from '@/components/product-detail/suggestion-strip';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { Icon } from '@/components/ui/icon';
@@ -262,7 +263,10 @@ export function ProductDetailSheet({
                 <ThemedText style={[styles.axisHeading, { color: theme.textSecondary }]}>
                   {AXIS_LABELS[axis]}
                 </ThemedText>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cardsRow}>
+                {/* No panel here, unlike the detail view: this whole screen is suggestions,
+                    so a panel per axis would separate nothing from nothing. The strip fades
+                    into the sheet's own surface. */}
+                <SuggestionStrip fadeTo={theme.backgroundElement}>
                   {products.map((suggestion) => (
                     <SuggestionCard
                       key={String(suggestion.id)}
@@ -272,7 +276,7 @@ export function ProductDetailSheet({
                       onPress={() => pickSuggestion(suggestion)}
                     />
                   ))}
-                </ScrollView>
+                </SuggestionStrip>
               </View>
             ))}
           </>
@@ -366,7 +370,11 @@ export function ProductDetailSheet({
             </View>
 
             {inlineAxis && suggestions.length > 0 ? (
-              <View style={styles.section}>
+              /* The tinted panel is what makes this read as its own section instead of
+                 dissolving into the sheet's vertical flow — the same wash the price and
+                 equivalence blocks above already use. It also gives the cards, which are
+                 `backgroundElement`, a surface to sit on other than themselves. */
+              <View style={[styles.suggestionsPanel, { backgroundColor: theme.background }]}>
                 {/* One axis inline keeps the strip short; the rest of the family is a tap
                     away, which is also the only route to the bulk-entry list. */}
                 <View style={styles.suggestionsHeader}>
@@ -387,7 +395,7 @@ export function ProductDetailSheet({
                   Toca para cambiar de producto
                 </ThemedText>
 
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cardsRow}>
+                <SuggestionStrip fadeTo={theme.background}>
                   {suggestions.map((suggestion) => (
                     <SuggestionCard
                       key={String(suggestion.id)}
@@ -397,7 +405,7 @@ export function ProductDetailSheet({
                       onPress={() => focusSuggestion(suggestion)}
                     />
                   ))}
-                </ScrollView>
+                </SuggestionStrip>
               </View>
             ) : null}
 
@@ -557,6 +565,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
+  suggestionsPanel: {
+    gap: 6,
+    padding: Spacing.two,
+    borderRadius: Radius.md,
+  },
   suggestionsHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -604,11 +617,6 @@ const styles = StyleSheet.create({
   },
   hint: {
     fontSize: 11,
-  },
-  cardsRow: {
-    gap: Spacing.two,
-    paddingRight: Spacing.three,
-    paddingTop: Spacing.one,
   },
   draftSection: {
     gap: 6,

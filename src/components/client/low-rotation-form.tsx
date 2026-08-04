@@ -2,11 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
-import {
-  DateInputField,
-  isDateInputComplete,
-  isDateInputValid,
-} from '@/components/ui/date-input-field';
+import { DateInputField, isDateInputValid } from '@/components/ui/date-input-field';
 import { Icon } from '@/components/ui/icon';
 import { PhotoPicker } from '@/components/ui/photo-picker';
 import { Select } from '@/components/ui/select';
@@ -18,55 +14,103 @@ import { useTheme } from '@/hooks/use-theme';
 /** Photos allowed on one slow-moving stock record. */
 const MAX_PHOTOS = 3;
 
-/** Characters in a complete `DD/MM/AAAA` value. */
 /**
- * Re-exported under the names the tasks screen already imports. The implementation moved to
- * `DateInputField` when the returns flow needed the same masked date — one copy of the
- * `31/02` rollover check, not two that can drift apart.
+ * One slow-moving product found at the client. A task carries a list of these: the seller
+ * walks the shelf and finds several, not one. The shape is owned here rather than by the
+ * tasks screen so the form is the only place that has to change when a field is added,
+ * and the screen's draft type just points at it.
  */
-export const isExpiryComplete = isDateInputComplete;
-export const isExpiryValid = isDateInputValid;
-
-/**
- * What the seller records for a slow-moving product found at the client. The shape
- * is owned here rather than by the tasks screen so the form is the only place that
- * has to change when a field is added, and the screen's draft type just points at it.
- */
-export type LowRotationValue = {
+export type LowRotationEntry = {
+  /** Identity, so editing and deleting do not depend on the position in the list. */
+  id: string;
   productId: number | null;
   /** Kept as the typed string, not a Date: the field is a masked DD/MM/AAAA input and a
    *  partially typed value is a normal intermediate state. */
   expiry: string;
+  /** Warehouse the stock came from. */
   lot: LotCode | null;
+  /** The lot number printed on the package. Free text: the manufacturer defines it, not the
+   *  warehouse, so there is no list to validate it against. */
+  lotNumber: string;
   qty: number;
+  photos: string[];
 };
 
-export function emptyLowRotation(): LowRotationValue {
-  return { productId: null, expiry: '', lot: null, qty: 0 };
+/**
+ * Session-local ids. They only have to be unique among the entries of one open task and
+ * never leave the screen, so a counter beats pulling in a dependency for it.
+ */
+let nextEntryId = 0;
+
+export function emptyLowRotationEntry(): LowRotationEntry {
+  nextEntryId += 1;
+  return {
+    id: `lr-${nextEntryId}`,
+    productId: null,
+    expiry: '',
+    lot: null,
+    lotNumber: '',
+    qty: 0,
+    photos: [],
+  };
+}
+
+/** How a lot number is stored, and how it is compared when looking for duplicates. */
+export function normalizeLotNumber(lotNumber: string): string {
+  return lotNumber.trim().toUpperCase();
 }
 
 /**
- * Form for the `baja-rotacion` task response: which product, when it expires, which
- * lot, how much of it, and photographic evidence.
+ * Whether an entry can be saved. Every field of the record matters: a product with no lot
+ * or no expiry is not a half-filled record, it is an unusable one. Gating the *save* means
+ * the list can never hold a record that is missing something.
+ */
+export function isLowRotationEntryComplete(entry: LowRotationEntry): boolean {
+  return (
+    entry.productId !== null &&
+    // The strict check, not just "ten characters typed": the field already warns that 31/02
+    // is not a date, and the gate has to agree with the warning.
+    isDateInputValid(entry.expiry) &&
+    entry.lot !== null &&
+    normalizeLotNumber(entry.lotNumber).length > 0 &&
+    entry.qty > 0 &&
+    entry.photos.length > 0
+  );
+}
+
+/**
+ * Entries that repeat another one exactly — same product, warehouse, lot number and expiry.
+ * A product legitimately appears twice with a different lot or expiry, so only the full
+ * match is worth flagging, and even that is a warning and not a block: what it catches is
+ * loading the same shelf twice by accident, and the seller is the one who decides.
+ */
+export function duplicateIds(entries: LowRotationEntry[]): Set<string> {
+  const seen = new Map<string, string[]>();
+  for (const entry of entries) {
+    const key = [entry.productId, entry.lot, normalizeLotNumber(entry.lotNumber), entry.expiry].join('|');
+    seen.set(key, [...(seen.get(key) ?? []), entry.id]);
+  }
+  return new Set([...seen.values()].filter((ids) => ids.length > 1).flat());
+}
+
+/**
+ * Editor for one entry: which product, when it expires, which lot, how much of it, and
+ * photographic evidence. The list of entries lives in `LowRotationList`; this is what the
+ * sheet swaps to when the seller adds or edits one of them.
  *
- * Choosing the product swaps the sheet's content for `ProductPickerView` instead of
- * raising a second sheet. This form is rendered inside a `BottomSheet`, which is a
- * `Modal`: a picker raised as another sheet would be presented *below* the open one
- * and never become visible. The swap is owned by the tasks screen, so this form only
- * asks for it.
+ * Choosing the product swaps the sheet's content again, for `ProductPickerView`, instead of
+ * raising a second sheet. This form is rendered inside a `BottomSheet`, which is a `Modal`:
+ * a picker raised as another sheet would be presented *below* the open one and never become
+ * visible. The swap is owned by the tasks screen, so this form only asks for it.
  */
 export function LowRotationForm({
   value,
   onChange,
-  photos,
-  onPhotosChange,
   onOpenProductPicker,
 }: {
-  value: LowRotationValue;
+  value: LowRotationEntry;
   /** Patch-shaped so each field updates without the caller restating the rest. */
-  onChange: (patch: Partial<LowRotationValue>) => void;
-  photos: string[];
-  onPhotosChange: (photos: string[]) => void;
+  onChange: (patch: Partial<LowRotationEntry>) => void;
   onOpenProductPicker: () => void;
 }) {
   return (
@@ -82,7 +126,12 @@ export function LowRotationForm({
       />
 
       <SectionLabel>Lote</SectionLabel>
-      <LotSelect lot={value.lot} onSelect={(lot) => onChange({ lot })} />
+      <LotRow
+        lot={value.lot}
+        lotNumber={value.lotNumber}
+        onSelectLot={(lot) => onChange({ lot })}
+        onChangeLotNumber={(lotNumber) => onChange({ lotNumber })}
+      />
 
       <SectionLabel>Cantidad</SectionLabel>
       <QtyStepper qty={value.qty} onChange={(qty) => onChange({ qty })} />
@@ -92,7 +141,12 @@ export function LowRotationForm({
           this visit, and an old shot of the same shelf is the easiest way to file a record
           that no longer matches reality. */}
       <SectionLabel>Fotos</SectionLabel>
-      <PhotoPicker uris={photos} onChange={onPhotosChange} max={MAX_PHOTOS} cameraOnly />
+      <PhotoPicker
+        uris={value.photos}
+        onChange={(photos) => onChange({ photos })}
+        max={MAX_PHOTOS}
+        cameraOnly
+      />
     </View>
   );
 }
@@ -270,23 +324,65 @@ export function ProductPickerView({
 /* ------------------------------------------------------------------ */
 
 /**
- * A select rather than a segmented row. The lot list is warehouse data that grows, and a
- * segment divides the width by however many codes exist — past a handful the labels stop
- * being readable, while a select costs the same regardless of the count.
+ * Two fields under one label, because the lot is two facts: the warehouse the stock shipped
+ * from, and the lot number printed on the package. The warehouse is a short closed list, the
+ * number is whatever the manufacturer stamped — so the select is sized to its content and
+ * the input takes the rest of the row.
  *
- * Codes are their own labels here: they are what is printed on the package and what the
- * seller reads out loud, so expanding them into invented long names would only make the
- * seller translate back (see the note on `LotCode`).
+ * The controls carry their own placeholders rather than a caption each. Two more labels under
+ * the row would say the same thing at the cost of another line of an already long sheet.
+ *
+ * A select rather than a segmented row for the warehouse: the list is data that grows, and a
+ * segment divides the width by however many codes exist — past a handful the labels stop
+ * being readable, while a select costs the same regardless of the count. The codes are their
+ * own labels: they are what the seller reads out loud, so expanding them into invented long
+ * names would only make the seller translate back (see the note on `LotCode`).
  */
-function LotSelect({ lot, onSelect }: { lot: LotCode | null; onSelect: (lot: LotCode) => void }) {
+function LotRow({
+  lot,
+  lotNumber,
+  onSelectLot,
+  onChangeLotNumber,
+}: {
+  lot: LotCode | null;
+  lotNumber: string;
+  onSelectLot: (lot: LotCode) => void;
+  onChangeLotNumber: (lotNumber: string) => void;
+}) {
+  const theme = useTheme();
+
   return (
-    <Select
-      value={lot}
-      options={LOT_CODES.map((code) => ({ value: code, label: code }))}
-      placeholder="Elegir lote"
-      icon="tag.fill"
-      onSelect={onSelect}
-    />
+    <View style={styles.lotRow}>
+      <View style={styles.lotSelect}>
+        <Select
+          value={lot}
+          options={LOT_CODES.map((code) => ({ value: code, label: code }))}
+          placeholder="Depósito"
+          icon="tag.fill"
+          onSelect={onSelectLot}
+        />
+      </View>
+
+      <TextInput
+        value={lotNumber}
+        onChangeText={onChangeLotNumber}
+        placeholder="N° de lote"
+        placeholderTextColor={theme.textSecondary}
+        // Lot numbers are stamped in upper case; typing them in lower and having the app
+        // fix it on save would show the seller one thing and store another.
+        autoCapitalize="characters"
+        autoCorrect={false}
+        style={[
+          styles.lotInput,
+          {
+            backgroundColor: theme.background,
+            // Accent border on a filled field, the same as every other control here.
+            borderColor: lotNumber.trim().length > 0 ? theme.accent : theme.border,
+            color: theme.text,
+          },
+        ]}
+      />
+    </View>
   );
 }
 
@@ -491,6 +587,24 @@ const styles = StyleSheet.create({
     // times taller than the text inside it.
     lineHeight: 13,
     fontWeight: '700',
+  },
+  lotRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  lotSelect: {
+    // Sized to "Depósito" plus its icon and chevron, so the field does not shrink when the
+    // placeholder gives way to a two-letter code.
+    width: 132,
+  },
+  lotInput: {
+    flex: 1,
+    height: ControlHeight.input,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    paddingHorizontal: Spacing.two,
+    fontSize: 13,
   },
   stepper: {
     flexDirection: 'row',

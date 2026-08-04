@@ -26,6 +26,7 @@ import { useHardwareBack } from '@/hooks/use-hardware-back';
 import { useOrderActions } from '@/hooks/use-order-actions';
 import { useTheme } from '@/hooks/use-theme';
 import type { ThemeColor } from '@/constants/theme';
+import { withAlpha } from '@/utils/color';
 import { formatBs } from '@/utils/currency';
 import { distanceKm, formatDistance } from '@/utils/geo';
 
@@ -828,15 +829,6 @@ export default function ClientDetailScreen() {
       />
     </View>
   );
-}
-
-/** Adds an alpha channel to a `#rrggbb` color so it can render semi-transparent. */
-function withAlpha(hex: string, alpha: number): string {
-  const value = parseInt(hex.replace('#', ''), 16);
-  const r = (value >> 16) & 255;
-  const g = (value >> 8) & 255;
-  const b = value & 255;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 /** Visit status as a coloured pill. Text only — the colour already carries the state. */
