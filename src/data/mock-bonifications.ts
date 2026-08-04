@@ -1,5 +1,12 @@
 import type { CartLine, Product } from '@/types/catalog';
-import { calculateIncentives, type Incentives, type PaymentMethod } from '@/data/mock-incentives';
+import type { MapClient } from '@/data/mock-clients';
+import {
+  calculateIncentives,
+  priceListFor,
+  type Incentives,
+  type PaymentMethod,
+  type PriceList,
+} from '@/data/mock-incentives';
 import { lineMinUnits } from '@/utils/order';
 
 /**
@@ -43,10 +50,20 @@ const BONIFICATION_TIERS = [
   { minUnits: 24, giftQty: 2 },
 ] as const;
 
-/** The award this line qualifies for, or null when it does not reach the first threshold. */
-export function bonificationFor(line: CartLine): LineBonification | null {
+/**
+ * The award this line qualifies for on a given price list, or null when it does not reach even the
+ * nearest threshold.
+ *
+ * The list moves the thresholds rather than the quantities awarded: what a client is owed for
+ * reaching a tier is a property of the product, and how easily they reach it is the property of
+ * their terms. Rounded up, so a factor can only ever make a tier harder or easier by whole units —
+ * a threshold of 21.6 pieces is not a number anyone can sell against.
+ */
+export function bonificationFor(line: CartLine, priceList: PriceList): LineBonification | null {
   const units = lineMinUnits(line);
-  const tier = BONIFICATION_TIERS.find((candidate) => units >= candidate.minUnits);
+  const tier = BONIFICATION_TIERS.find(
+    (candidate) => units >= Math.ceil(candidate.minUnits * priceList.bonificationTierFactor),
+  );
   if (!tier) return null;
 
   return {
@@ -92,18 +109,26 @@ const SIMULATED_LATENCY_MS = 1100;
  * promise now is what keeps the wiring honest when the real endpoint replaces this. Both
  * halves come back together because the service resolves them together — the discount
  * depends on the subtotal, and the bonifications on the same lines that produced it.
+ *
+ * The client travels with the request because both halves depend on it: the discount comes off
+ * their price list, and the free-goods thresholds are scaled by the same list. One resolution of
+ * the list serves both, which is also what stops the two halves of one reply from having been
+ * priced against different terms.
  */
 export function fetchOrderIncentives(
   lines: CartLine[],
   paymentMethod: PaymentMethod,
   subtotal: number,
+  client: MapClient | null,
 ): Promise<OrderIncentives> {
+  const priceList = priceListFor(client);
+
   return new Promise((resolve) => {
     setTimeout(() => {
       resolve({
-        incentives: calculateIncentives(paymentMethod, subtotal),
+        incentives: calculateIncentives(paymentMethod, subtotal, client),
         bonifications: lines
-          .map(bonificationFor)
+          .map((line) => bonificationFor(line, priceList))
           .filter((bonification): bonification is LineBonification => bonification !== null),
       });
     }, SIMULATED_LATENCY_MS);

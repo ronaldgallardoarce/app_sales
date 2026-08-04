@@ -162,8 +162,11 @@ export default function OrderSummaryScreen() {
             style={[styles.roundButton, { backgroundColor: theme.backgroundElement }]}>
             <Icon name="chevron.left" size={18} color={theme.text} />
           </Pressable>
+          {/* Named for what is on screen: this route serves both documents, and a factura under a
+              header reading "Resumen del pedido" would have the seller doubting they opened the right
+              thing at the moment they are handing it to a client. */}
           <ThemedText type="smallBold" style={styles.headerTitle} numberOfLines={1}>
-            Resumen del pedido
+            {data.kind === 'factura' ? 'Factura' : 'Resumen del pedido'}
           </ThemedText>
           {/* Both "ver" actions sit up here, away from the three filled buttons below, because
               neither of them sends anything. They answer "what is the client about to receive?",

@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ActiveVisitBar } from '@/components/client/active-visit-bar';
 import { OrderCard } from '@/components/orders/order-card';
 import { OrderDetailSheet } from '@/components/orders/order-detail-sheet';
-import { summaryFromOrder } from '@/components/orders/order-summary-document';
+import { invoiceFromOrder, summaryFromOrder } from '@/components/orders/order-summary-document';
 import { ThemedText } from '@/components/themed-text';
 import { DatePickerDialog } from '@/components/ui/date-picker';
 import { Icon } from '@/components/ui/icon';
@@ -231,6 +231,15 @@ export default function OrdersScreen() {
         onShowSummary={() => {
           if (!openOrder) return;
           showSummary(summaryFromOrder(openOrder));
+          setOpenOrderId(null);
+        }}
+        // Same route, same share actions, a different document. Snapshotted and the sheet closed
+        // for the same reason as above.
+        onShowInvoice={() => {
+          if (!openOrder) return;
+          const invoice = invoiceFromOrder(openOrder);
+          if (!invoice) return;
+          showSummary(invoice);
           setOpenOrderId(null);
         }}
       />

@@ -8,7 +8,7 @@ import { ordersPlacedToday } from '@/components/client/today-orders';
 import { VisitTimer } from '@/components/client/visit-timer';
 import { MiniMap } from '@/components/map/mini-map';
 import { OrderDetailSheet } from '@/components/orders/order-detail-sheet';
-import { summaryFromOrder } from '@/components/orders/order-summary-document';
+import { invoiceFromOrder, summaryFromOrder } from '@/components/orders/order-summary-document';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { useDialog } from '@/components/ui/dialog';
@@ -819,6 +819,14 @@ export default function ClientDetailScreen() {
         onShowSummary={() => {
           if (!openOrder) return;
           showSummary(summaryFromOrder(openOrder));
+          setOpenOrderId(null);
+        }}
+        // The factura, on the same route and with the same share actions behind it.
+        onShowInvoice={() => {
+          if (!openOrder) return;
+          const invoice = invoiceFromOrder(openOrder);
+          if (!invoice) return;
+          showSummary(invoice);
           setOpenOrderId(null);
         }}
       />

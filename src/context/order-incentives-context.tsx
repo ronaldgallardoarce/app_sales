@@ -7,6 +7,7 @@ import {
   type LineBonification,
   type OrderIncentives,
 } from '@/data/mock-bonifications';
+import type { MapClient } from '@/data/mock-clients';
 import type { PaymentMethod } from '@/data/mock-incentives';
 import type { CartLine, Product } from '@/types/catalog';
 
@@ -26,11 +27,16 @@ interface OrderIncentivesContextValue {
    * can wait before navigating — the summary screen is only worth opening once there is something
    * to summarise. Resolves `false` if the call failed, in which case nothing was stored and the
    * caller should stay put and say so.
+   *
+   * The client is passed in rather than read from a context here: the two screens that price an
+   * order both already hold one, resolved from their own route param, and re-resolving it in this
+   * provider is how the reply could end up describing a different client than the screen showing it.
    */
   request: (
     lines: CartLine[],
     paymentMethod: PaymentMethod,
     subtotal: number,
+    client: MapClient | null,
   ) => Promise<boolean>;
   /** Redirect one line's free goods to a sibling product — the variant the client asked for. */
   chooseGift: (productId: number, product: Product) => void;
@@ -63,10 +69,15 @@ export function OrderIncentivesProvider({ children }: { children: ReactNode }) {
   const { status, result } = replies[scope];
 
   const request = useCallback(
-    async (lines: CartLine[], paymentMethod: PaymentMethod, subtotal: number) => {
+    async (
+      lines: CartLine[],
+      paymentMethod: PaymentMethod,
+      subtotal: number,
+      client: MapClient | null,
+    ) => {
       setReplies((prev) => ({ ...prev, [scope]: { ...prev[scope], status: 'loading' } }));
       try {
-        const reply = await fetchOrderIncentives(lines, paymentMethod, subtotal);
+        const reply = await fetchOrderIncentives(lines, paymentMethod, subtotal, client);
         setReplies((prev) => ({ ...prev, [scope]: { status: 'ready', result: reply } }));
         return true;
       } catch {

@@ -3,7 +3,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { Linking, Share } from 'react-native';
 
-import { toRows, type OrderSummaryData } from '@/components/orders/order-summary-document';
+import { paidAtLabel, toRows, type OrderSummaryData } from '@/components/orders/order-summary-document';
 import { formatAmount, formatBs } from '@/utils/currency';
 
 /**
@@ -53,6 +53,16 @@ export function asText(data: OrderSummaryData): string {
   const parts = [
     data.title,
     `${data.clientCode} - ${data.clientName}`,
+    // Leads the meta rather than following it: on a factura these are the lines the client's
+    // accountant looks for, and in a chat message there is no column to put them in but the top.
+    ...(data.fiscal
+      ? [
+          `NIT: ${data.fiscal.nit}`,
+          `Razón social: ${data.fiscal.razonSocial}`,
+          `Factura N°: ${data.fiscal.invoiceId}`,
+          `Pagado el: ${paidAtLabel(data.fiscal.paidAtMs)}`,
+        ]
+      : []),
     ...data.meta.map((item) => `${item.label}: ${item.value}`),
     '',
     'PRODUCTOS',
@@ -161,11 +171,29 @@ export function asHtml(data: OrderSummaryData): string {
       .totals td { border-top: none; padding: 4px 8px; }
       .totals .rule td { border-top: 1px solid #E3E6EA; }
       .totals .grand td { font-size: 15px; font-weight: 700; color: #2C8069; }
+      /* Ink on white like the rest of the sheet, so it survives being photocopied. */
+      .paid { font-size: 10px; font-weight: 700; letter-spacing: 0.6px; color: #FFFFFF; background: #2C8069; border-radius: 999px; padding: 2px 7px; vertical-align: middle; }
     </style>
   </head>
   <body>
-    <h1>${escapeHtml(data.title)}</h1>
+    <h1>${escapeHtml(data.title)}${data.fiscal ? ' <span class="paid">PAGADO</span>' : ''}</h1>
     <p class="client">${escapeHtml(`${data.clientCode}-${data.clientName}`)}</p>
+
+    ${
+      data.fiscal
+        ? `
+    <h2>Datos de facturación</h2>
+    <table class="totals">
+      <tbody>
+        ${totalRow('NIT', escapeHtml(data.fiscal.nit))}
+        ${totalRow('Razón social', escapeHtml(data.fiscal.razonSocial))}
+        ${totalRow('Factura N°', escapeHtml(data.fiscal.invoiceId))}
+        ${totalRow('Pagado el', escapeHtml(paidAtLabel(data.fiscal.paidAtMs)))}
+      </tbody>
+    </table>`
+        : ''
+    }
+
     <div class="meta">
       ${data.meta.map((item) => `<div><span>${escapeHtml(item.label)}:</span> <strong>${escapeHtml(item.value)}</strong></div>`).join('')}
     </div>

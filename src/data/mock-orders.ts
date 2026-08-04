@@ -14,6 +14,19 @@ import { iceTotalOf, lineAmount } from '@/utils/order';
  */
 export type OrderStatus = 'borrador' | 'confirmado' | 'entregado' | 'anulado';
 
+/** Money already in, on an order that was paid before it was registered. */
+export type OrderPayment = {
+  /** When the money actually landed, as reported by sales — not when the app found out. */
+  paidAtMs: number;
+  /** The intent it came in against: what the office reconciles the deposit by. */
+  intentId: string;
+  /**
+   * Null while the invoicing service has not caught up. Paid without an invoice is a real state that
+   * lasts seconds, so it has to be something this record can say rather than something it implies.
+   */
+  invoiceId: string | null;
+};
+
 /** Typed with `ThemeColor` like the project's other status maps, so a token is looked up on the
  *  theme without a cast and a typo is a compile error rather than a missing colour. */
 export const ORDER_STATUS_META: Record<
@@ -76,6 +89,15 @@ export type PlacedOrder = {
    * told the client, and a reason that only ever lived in a dialog is a reason nobody can look up.
    */
   cancelReason?: CancelReason;
+  /**
+   * What was collected before the order was registered — today that means pronto pago, and absent is
+   * what every order paid on delivery looks like.
+   *
+   * Its own record rather than another `OrderStatus` value, for the same reason `synced` is not one:
+   * `status` says where the goods are, and an order can be paid and undelivered or delivered and
+   * unpaid. Folded onto one axis, one of those two facts could not be written down.
+   */
+  payment?: OrderPayment;
   lines: CartLine[];
   /** The free goods granted, one entry per line that earned any. */
   bonifications: LineBonification[];
@@ -128,6 +150,36 @@ export const CHANGE_WINDOW_HOURS = 2;
 const CHANGE_WINDOW_MS = CHANGE_WINDOW_HOURS * 60 * 60 * 1000;
 
 /**
+ * How long a *collected* order may still be withdrawn.
+ *
+ * Much shorter than the ordinary window, and measured from a different instant, because a different
+ * thing is being undone: annulling an unpaid order retracts a promise, and annulling this one
+ * reverses money that has already left the client's account. That stays something the seller can do
+ * on the spot while the client is still standing there — and stops being it once the payment has
+ * settled, at which point it is a refund and the office owns it.
+ *
+ * Half an hour is the judgement call in that sentence. Long enough for "el cliente se arrepintió"
+ * said a minute after paying, short enough that the seller is never reversing a payment from another
+ * visit.
+ */
+export const PAID_ANNUL_WINDOW_MINUTES = 30;
+
+const PAID_ANNUL_WINDOW_MS = PAID_ANNUL_WINDOW_MINUTES * 60 * 1000;
+
+/**
+ * When the order's remaining window closes, on whichever clock governs it.
+ *
+ * A collected order is timed from the payment rather than from the order: what has to still be
+ * reversible is the money, so the instant the money landed is the only one the deadline can honestly
+ * hang off. For everything else it is the order's own creation, as it always was.
+ */
+function changeDeadlineOf(order: PlacedOrder): number {
+  return order.payment
+    ? order.payment.paidAtMs + PAID_ANNUL_WINDOW_MS
+    : order.createdAtMs + CHANGE_WINDOW_MS;
+}
+
+/**
  * Whether the order may still be edited: young enough, and never edited before.
  *
  * Two rules, and the one-edit half is the stricter of them. It is checked first because it is
@@ -139,6 +191,11 @@ const CHANGE_WINDOW_MS = CHANGE_WINDOW_HOURS * 60 * 60 * 1000;
  * it belongs here.
  */
 export function canEditOrder(order: PlacedOrder, now: number = Date.now()): boolean {
+  // Never, on an order that was collected up front. Editing rewrites the lines, the lines are what
+  // the total came from, and that total is an amount the client has already paid — so an edit here
+  // would leave the money and the order disagreeing about what was bought, with no mechanism to
+  // settle the difference. Withdrawing it and taking a new order is the path that exists.
+  if (order.payment) return false;
   return !order.edited && now - order.createdAtMs < CHANGE_WINDOW_MS;
 }
 
@@ -152,7 +209,9 @@ export function canEditOrder(order: PlacedOrder, now: number = Date.now()): bool
  * 9:05 unable to cancel it at 9:10.
  */
 export function canAnnulOrder(order: PlacedOrder, now: number = Date.now()): boolean {
-  return order.status !== 'anulado' && now - order.createdAtMs < CHANGE_WINDOW_MS;
+  // A collected order is still withdrawable — that is deliberate, and the one action left on it once
+  // editing is closed. It just runs on the payment's much shorter clock, via `changeDeadlineOf`.
+  return order.status !== 'anulado' && now < changeDeadlineOf(order);
 }
 
 /**
@@ -166,7 +225,10 @@ export function canAnnulOrder(order: PlacedOrder, now: number = Date.now()): boo
 export function editBlockedReason(
   order: PlacedOrder,
   now: number = Date.now(),
-): 'edited' | 'expired' | null {
+): 'paid' | 'edited' | 'expired' | null {
+  // First, because it is the strongest of the three and the only one that was never about time: the
+  // other two are "not any more", this one is "not this order, ever".
+  if (order.payment) return 'paid';
   if (order.edited) return 'edited';
   return now - order.createdAtMs < CHANGE_WINDOW_MS ? null : 'expired';
 }
@@ -180,7 +242,10 @@ export function editBlockedReason(
  * button live, and the sentence under it saying the time was gone.
  */
 export function changeTimeLeftLabel(order: PlacedOrder, now: number = Date.now()): string {
-  const minutes = Math.max(Math.floor((order.createdAtMs + CHANGE_WINDOW_MS - now) / 60_000), 0);
+  // Off the same deadline the buttons are gated on. Read from the order's creation regardless, this
+  // would have told a collected order it had an hour and a half left while its annul button was
+  // already shut — the exact class of lie the minutes-not-hours fix above was about.
+  const minutes = Math.max(Math.floor((changeDeadlineOf(order) - now) / 60_000), 0);
   if (minutes < 60) return `${minutes} min`;
 
   const hours = Math.floor(minutes / 60);
@@ -303,6 +368,41 @@ function order(
  * syncs is there for the same reason — every branch the row can render has an example.
  */
 export const mockOrders: PlacedOrder[] = [
+  /**
+   * Collected up front and still inside the window where the seller can reverse it.
+   *
+   * Its own fixture rather than a `payment` bolted onto 4517 below, and that is the point: 4517
+   * exists to show an order refused for having already been edited, and a prepayment on it would
+   * take that over — `editBlockedReason` answers 'paid' first, so the fixture demonstrating 'edited'
+   * would have stopped demonstrating anything.
+   *
+   * Paid eight minutes ago, so it lands inside the thirty-minute reversal window rather than merely
+   * inside the two-hour one. That distinction is the whole rule, and a fixture on the wrong side of
+   * it would leave the refund path unreachable in the mock data.
+   */
+  order({
+    id: 4519,
+    clientId: mapClients[0]?.id ?? 'c1',
+    createdAtMs: minutesAgo(9),
+    deliveryDate: futureKey(1),
+    deliveryFrom: '14:00',
+    deliveryTo: '18:00',
+    paymentMethod: 'Pronto pago',
+    remote: false,
+    status: 'confirmado',
+    synced: true,
+    discountPct: 13,
+    payment: {
+      paidAtMs: minutesAgo(8),
+      intentId: 'pi-fixture-4519',
+      invoiceId: 'F-88231',
+    },
+    lines: linesOf([
+      { id: 10020, qtyMax: 3, qtyMin: 0 },
+      { id: 10100, qtyMax: 1, qtyMin: 6 },
+    ]),
+    bonifications: [gift(10020, 2)],
+  }),
   order({
     id: 4518,
     clientId: mapClients[0]?.id ?? 'c1',

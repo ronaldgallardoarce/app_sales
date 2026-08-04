@@ -9,17 +9,24 @@ import { ControlHeight, FloatingShadow, Radius, Spacing } from '@/constants/them
 import { useCart } from '@/context/cart-context';
 import { useConnectivity } from '@/context/connectivity-context';
 import { useOrderIncentives } from '@/context/order-incentives-context';
-import { type PaymentMethod } from '@/data/mock-incentives';
+import type { MapClient } from '@/data/mock-clients';
+import { priceListFor, type PaymentMethod } from '@/data/mock-incentives';
 import { useTheme } from '@/hooks/use-theme';
 import type { CartLine } from '@/types/catalog';
 import { lineAmount, lineIce, lineQtyDetail } from '@/utils/order';
 import { formatBs } from '@/utils/currency';
 
 export function OrderPanel({
+  client,
   contentPaddingBottom,
   onContinue,
   onEditLine,
 }: {
+  /**
+   * Who the order is for. Null on a catalog opened without one, which is browsable but cannot be
+   * priced honestly — most of the discount comes off this client's price list.
+   */
+  client: MapClient | null;
   contentPaddingBottom: number;
   /**
    * Move on to the order summary, where incentives are calculated and the order is
@@ -45,12 +52,19 @@ export function OrderPanel({
   const pricing = status === 'loading';
 
   /**
+   * Whether choosing "Pronto pago" is worth anything to this client at all — not how much, which is
+   * the pricing service's answer and is never stated here. Nothing on this panel is priced from it:
+   * the totals below are the raw cart.
+   */
+  const hasPromptPaymentDiscount = priceListFor(client).promptPaymentPct > 0;
+
+  /**
    * Resolve the order's incentives, then move on. Awaited rather than fired and forgotten so
    * the summary opens with the reply already in hand instead of rendering an empty shell and
    * filling in underneath the seller.
    */
   const handleApplyIncentives = async () => {
-    const resolved = await request(lines, paymentMethod, totalAmount);
+    const resolved = await request(lines, paymentMethod, totalAmount, client);
     if (!resolved) {
       // Stays on the cart. Opening the summary with no reply would show it falling back to a
       // locally guessed discount, which looks like an answer and is not one.
@@ -208,12 +222,18 @@ export function OrderPanel({
           <Icon name="chevron.down" size={13} color={theme.textSecondary} />
         </Pressable>
 
+        {/* Says that there is a discount and not how much of one. The figure belongs to the pricing
+            service, and quoting it here would be the app promising a number before anything has
+            resolved it — the seller reads the real one off the totals on the next screen, where it is
+            the answer rather than an estimate. What this notice is for is the reason to choose these
+            terms at all. */}
         {paymentMethod === 'Pronto pago' ? (
           <View style={[styles.notice, { backgroundColor: theme.accentAltSoft }]}>
             <Icon name="exclamationmark.circle" size={14} color={theme.accentAlt} />
             <ThemedText style={[styles.noticeText, { color: theme.accentAlt }]}>
-              Pronto pago aplica un descuento especial. El producto no se descarga hasta recibir el
-              pago del cliente.
+              {hasPromptPaymentDiscount
+                ? 'Con pronto pago el cliente recibe un descuento extra sobre su lista de precios.'
+                : 'La lista de precios de este cliente no suma descuento extra por pronto pago.'}
             </ThemedText>
           </View>
         ) : null}

@@ -509,6 +509,7 @@ export default function CatalogScreen() {
         productCount={cart.productCount}
         totalAmount={cart.totalAmount}>
         <OrderPanel
+          client={routeClient}
           contentPaddingBottom={Spacing.three}
           onContinue={goToSummary}
           onEditLine={handleEditLine}

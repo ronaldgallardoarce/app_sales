@@ -5,7 +5,7 @@ import { Icon } from '@/components/ui/icon';
 import { Radius, Spacing } from '@/constants/theme';
 import type { LineBonification } from '@/data/mock-bonifications';
 import { mapClients } from '@/data/mock-clients';
-import { deliveryDateLabel } from '@/data/mock-order-details';
+import { deliveryDateLabel, orderDetailsFor } from '@/data/mock-order-details';
 import { orderNumberLabel, type PlacedOrder } from '@/data/mock-orders';
 import { useTheme } from '@/hooks/use-theme';
 import type { CartLine } from '@/types/catalog';
@@ -34,6 +34,28 @@ export type OrderSummaryData = {
   discount: number;
   ice: number;
   total: number;
+  /**
+   * Which document this is, defaulting to a summary.
+   *
+   * One component for both rather than a second one that would drift: the table, the free goods and
+   * the totals are the same figures either way, and a client comparing the factura against the
+   * summary they were sent an hour earlier has to find the same numbers in the same places. What a
+   * factura adds is `fiscal` — and what it means is that the money is already in.
+   */
+  kind?: SummaryKind;
+  /** Present only on a factura: the fields that make it one. */
+  fiscal?: FiscalDetails;
+};
+
+export type SummaryKind = 'resumen' | 'factura';
+
+/** What turns the order into a fiscal document. Issued by the invoicing service, never by the app. */
+export type FiscalDetails = {
+  invoiceId: string;
+  nit: string;
+  razonSocial: string;
+  /** When the money landed. A factura states it; a summary has nothing to state. */
+  paidAtMs: number;
 };
 
 /**
@@ -61,6 +83,55 @@ export function summaryFromOrder(order: PlacedOrder): OrderSummaryData {
     ice: order.ice,
     total: order.total,
   };
+}
+
+/**
+ * The same order as its factura, or null for an order that has no invoice to show.
+ *
+ * Built off `summaryFromOrder` rather than beside it, so the two documents cannot start disagreeing
+ * about the figures they share. Returns null in two different situations that mean the same thing
+ * here — the order was never prepaid, or it was and the invoicing service has not issued yet — and
+ * callers distinguish them by looking at `order.payment`, which is where that difference lives.
+ */
+export function invoiceFromOrder(order: PlacedOrder): OrderSummaryData | null {
+  const invoiceId = order.payment?.invoiceId;
+  if (!order.payment || !invoiceId) return null;
+
+  const client = mapClients.find((candidate) => candidate.id === order.clientId) ?? null;
+  const details = client ? orderDetailsFor(client) : null;
+
+  return {
+    ...summaryFromOrder(order),
+    kind: 'factura',
+    // Named by the invoice number and not the order number: this is the document the client files
+    // and the office reconciles, and they both look it up by that.
+    title: `Factura ${invoiceId}`,
+    fiscal: {
+      invoiceId,
+      nit: details?.nit ?? '—',
+      razonSocial: details?.razonSocial ?? order.clientName,
+      paidAtMs: order.payment.paidAtMs,
+    },
+  };
+}
+
+/** Month names for `paidAtLabel`, matching how every other date in the app is spelled out. */
+const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+/**
+ * When the payment landed, to the minute: "18 jul 2026, 14:32".
+ *
+ * Formatted by hand rather than through `toLocaleString`, for the same reason the rest of this app
+ * spells its dates out: the format has to be identical on every phone that prints this document, and
+ * a locale that happens to be missing on one device would silently change what a fiscal record says.
+ */
+export function paidAtLabel(ms: number): string {
+  const date = new Date(ms);
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = MONTHS[date.getMonth()] ?? '—';
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${day} ${month} ${date.getFullYear()}, ${hours}:${minutes}`;
 }
 
 /** One priced line of the printed order. */
@@ -136,22 +207,53 @@ export function toRows(data: OrderSummaryData): SummaryRow[] {
 export function OrderSummaryDocument({ data }: { data: OrderSummaryData }) {
   const theme = useTheme();
   const rows = toRows(data);
+  const invoice = data.fiscal;
 
   return (
     <View style={styles.document}>
+      {/* Green rather than the summary's blue, and that is the whole signal: this is the one version
+          of the document where the money is already in, and it should be recognisable as that from
+          across a counter before a word of it is read. */}
       <View style={styles.header}>
-        <View style={[styles.headerIcon, { backgroundColor: theme.accentSoft }]}>
-          <Icon name="doc.text" size={22} color={theme.accent} />
+        <View
+          style={[
+            styles.headerIcon,
+            { backgroundColor: invoice ? theme.successSoft : theme.accentSoft },
+          ]}>
+          <Icon name="doc.text" size={22} color={invoice ? theme.success : theme.accent} />
         </View>
         <View style={styles.headerText}>
-          <ThemedText type="smallBold" style={styles.title} numberOfLines={1}>
-            {data.title}
-          </ThemedText>
+          <View style={styles.titleRow}>
+            <ThemedText type="smallBold" style={styles.title} numberOfLines={1}>
+              {data.title}
+            </ThemedText>
+            {invoice ? (
+              <View style={[styles.paidPill, { backgroundColor: theme.success }]}>
+                <ThemedText style={[styles.paidPillText, { color: theme.onSuccess }]}>
+                  PAGADO
+                </ThemedText>
+              </View>
+            ) : null}
+          </View>
           <ThemedText type="small" themeColor="textSecondary" numberOfLines={2}>
             {data.clientCode}-{data.clientName}
           </ThemedText>
         </View>
       </View>
+
+      {/* Above the products, because it is who the document is *for*: a factura is read from the top
+          by whoever files it, and the NIT is the first thing they check. */}
+      {invoice ? (
+        <>
+          <Label>Datos de facturación</Label>
+          <View style={[styles.totals, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+            <TotalRow label="NIT" value={invoice.nit} />
+            <TotalRow label="Razón social" value={invoice.razonSocial} />
+            <TotalRow label="Factura N°" value={invoice.invoiceId} />
+            <TotalRow label="Pagado el" value={paidAtLabel(invoice.paidAtMs)} />
+          </View>
+        </>
+      ) : null}
 
       {data.meta.length > 0 ? (
         <View style={styles.metaGrid}>
@@ -336,8 +438,26 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 1,
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   title: {
+    flexShrink: 1,
     fontSize: 15,
+  },
+  paidPill: {
+    flexShrink: 0,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: Radius.pill,
+  },
+  paidPillText: {
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
   metaGrid: {
     flexDirection: 'row',

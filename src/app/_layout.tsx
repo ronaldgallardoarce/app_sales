@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AccountMenu } from '@/components/account/account-menu';
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
+import { PendingInvoiceSync } from '@/components/orders/pending-invoice-sync';
 import { DialogProvider } from '@/components/ui/dialog';
 import { CartProvider } from '@/context/cart-context';
 import { ClientVisitProvider } from '@/context/client-visit-context';
@@ -17,6 +18,7 @@ import { ConnectivityProvider } from '@/context/connectivity-context';
 import { OrderIncentivesProvider } from '@/context/order-incentives-context';
 import { OrderSummaryProvider } from '@/context/order-summary-context';
 import { OrdersProvider } from '@/context/orders-context';
+import { PromptPaymentProvider } from '@/context/prompt-payment-context';
 import { ThemeSchemeProvider, useThemeSchemeContext } from '@/context/theme-scheme-context';
 import { AndroidImmersiveNavBar, Colors } from '@/constants/theme';
 
@@ -64,6 +66,9 @@ function RootNavigation() {
         {/* Inside the cart: what the pricing service replied describes the cart's lines, so
             it can never outlive them. */}
         <OrderIncentivesProvider>
+        {/* Inside the incentives reply, because a reservation is held against a priced order: empty
+            the cart or reprice it and what was being collected is no longer what was agreed. */}
+        <PromptPaymentProvider>
         {/* Placed orders outlive any one cart, so this sits outside the incentives reply. */}
         <OrdersProvider>
         <ClientVisitProvider>
@@ -73,6 +78,9 @@ function RootNavigation() {
         <OrderSummaryProvider>
         <DialogProvider>
         <AnimatedSplashOverlay />
+        {/* Renders nothing. Above the navigator on purpose: it finishes off orders whose factura
+            arrived after the seller had already moved on, so it must not be tied to any one screen. */}
+        <PendingInvoiceSync />
         <Stack screenOptions={{ headerShown: false }} />
         <AccountMenu />
         {/* Android draws edge-to-edge (status bar is transparent), so screens'
@@ -111,6 +119,7 @@ function RootNavigation() {
         </OrderSummaryProvider>
         </ClientVisitProvider>
         </OrdersProvider>
+        </PromptPaymentProvider>
         </OrderIncentivesProvider>
       </CartProvider>
       </ConnectivityProvider>

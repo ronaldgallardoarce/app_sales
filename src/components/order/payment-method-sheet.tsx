@@ -4,6 +4,7 @@ import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { Icon } from '@/components/ui/icon';
 import { Radius, Spacing } from '@/constants/theme';
+import { useConnectivity } from '@/context/connectivity-context';
 import { PAYMENT_METHODS, type PaymentMethod } from '@/data/mock-incentives';
 import { useTheme } from '@/hooks/use-theme';
 
@@ -33,8 +34,10 @@ export function PaymentMethodSheet({
   onSelect: (method: PaymentMethod) => void;
 }) {
   const theme = useTheme();
+  const { offline } = useConnectivity();
 
   const select = (method: PaymentMethod) => {
+    if (unavailableOffline(method, offline)) return;
     onSelect(method);
     onClose();
   };
@@ -52,28 +55,41 @@ export function PaymentMethodSheet({
         <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
           {PAYMENT_METHODS.map((method) => {
             const active = method === selected;
+            const blocked = unavailableOffline(method, offline);
             return (
               <Pressable
                 key={method}
+                disabled={blocked}
                 onPress={() => select(method)}
                 style={[
                   styles.row,
                   {
                     backgroundColor: active ? theme.accentSoft : theme.background,
                     borderColor: active ? theme.accent : theme.border,
+                    opacity: blocked ? 0.45 : 1,
                   },
                 ]}>
                 <Icon
-                  name={active ? 'checkmark.circle.fill' : 'cash'}
+                  name={blocked ? 'wifi.slash' : active ? 'checkmark.circle.fill' : 'cash'}
                   size={17}
                   color={active ? theme.accent : theme.textSecondary}
                 />
-                <ThemedText
-                  type="smallBold"
-                  numberOfLines={1}
-                  style={[styles.rowLabel, active ? { color: theme.accent } : null]}>
-                  {method}
-                </ThemedText>
+                <View style={styles.rowTexts}>
+                  <ThemedText
+                    type="smallBold"
+                    numberOfLines={1}
+                    style={[styles.rowLabel, active ? { color: theme.accent } : null]}>
+                    {method}
+                  </ThemedText>
+                  {/* Said on the option itself rather than after it is chosen. The alternative was a
+                      seller picking pronto pago with no signal and finding out two screens later, on a
+                      confirm button that had gone grey for reasons it could not distinguish. */}
+                  {blocked ? (
+                    <ThemedText themeColor="textSecondary" style={styles.rowNote} numberOfLines={2}>
+                      Necesita conexión para cobrar y confirmar el pago.
+                    </ThemedText>
+                  ) : null}
+                </View>
               </Pressable>
             );
           })}
@@ -81,6 +97,18 @@ export function PaymentMethodSheet({
       </View>
     </BottomSheet>
   );
+}
+
+/**
+ * Whether these terms need a connection the phone does not have.
+ *
+ * A third reason for something to be unavailable offline, distinct from the two the app already has:
+ * the cart cannot price an order without the service, and the confirm screen cannot register one —
+ * this one cannot hold stock or hear that a payment landed. Same cause, three different consequences,
+ * so they stay three separate conditions rather than one shared `offline` guard.
+ */
+function unavailableOffline(method: PaymentMethod, offline: boolean): boolean {
+  return offline && method === 'Pronto pago';
 }
 
 const styles = StyleSheet.create({
@@ -110,9 +138,16 @@ const styles = StyleSheet.create({
     borderRadius: Radius.sm,
     borderWidth: 1,
   },
-  rowLabel: {
+  rowTexts: {
     flex: 1,
+    gap: 1,
+  },
+  rowLabel: {
     fontSize: 13,
     lineHeight: 17,
+  },
+  rowNote: {
+    fontSize: 10,
+    lineHeight: 14,
   },
 });

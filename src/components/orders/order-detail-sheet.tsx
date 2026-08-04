@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { CancelOrderSheet } from '@/components/orders/cancel-order-sheet';
+import { paidAtLabel } from '@/components/orders/order-summary-document';
 import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { Icon, type IconName } from '@/components/ui/icon';
@@ -15,6 +16,7 @@ import {
   changeTimeLeftLabel,
   editBlockedReason,
   orderNumberLabel,
+  PAID_ANNUL_WINDOW_MINUTES,
   type CancelReason,
   type PlacedOrder,
 } from '@/data/mock-orders';
@@ -36,6 +38,7 @@ export function OrderDetailSheet({
   onEdit,
   onAnnul,
   onShowSummary,
+  onShowInvoice,
 }: {
   /** Null keeps the sheet closed; a value opens it on that order. */
   order: PlacedOrder | null;
@@ -49,6 +52,8 @@ export function OrderDetailSheet({
    * the moment closing one led to the other.
    */
   onShowSummary: () => void;
+  /** Opens the factura, on the same route and for the same reason. Only offered when one exists. */
+  onShowInvoice: () => void;
 }) {
   const theme = useTheme();
   const [cancelVisible, setCancelVisible] = useState(false);
@@ -75,6 +80,11 @@ export function OrderDetailSheet({
    * after it closed. Worth a ticking clock if the rule tightens further or the window is ever
    * shown on the list rows; not worth one for a sheet that is open for seconds at a time.
    */
+  /**
+   * What was collected up front, on the orders that were. Absent on everything paid against delivery,
+   * which is most of them — so the block below appears only when there is money to account for.
+   */
+  const payment = order.payment;
   const editable = canEditOrder(order);
   const annullable = canAnnulOrder(order);
   const blocked = editBlockedReason(order);
@@ -119,6 +129,52 @@ export function OrderDetailSheet({
             </ThemedText>
           </Pressable>
         </View>
+
+        {/* Money already in, and the document that proves it.
+
+            Its own block directly under the header, not a row down in the totals: "this was paid"
+            is the first thing that changes how the rest of the sheet is read — an order that is
+            already collected is not one the seller chases, and the factura is what the client asks
+            for by name.
+
+            Paid and invoiced are separated on purpose, because they are two services and two
+            moments. The seconds between them are a real state, and saying "Factura en camino" is
+            the honest version of a button that would otherwise open nothing. */}
+        {payment ? (
+          <View style={[styles.paymentCard, { backgroundColor: theme.successSoft }]}>
+            <View style={styles.paymentHead}>
+              <Icon name="creditcard" size={14} color={theme.success} />
+              <ThemedText type="smallBold" numberOfLines={1} style={[styles.paymentTitle, { color: theme.success }]}>
+                Cobrado por adelantado
+              </ThemedText>
+              <ThemedText style={[styles.paymentWhen, { color: theme.success }]} numberOfLines={1}>
+                {paidAtLabel(payment.paidAtMs)}
+              </ThemedText>
+            </View>
+
+            {payment.invoiceId ? (
+              <Pressable
+                onPress={onShowInvoice}
+                style={[styles.invoiceRow, { backgroundColor: theme.backgroundElement, borderColor: theme.success }]}>
+                <Icon name="doc.text" size={14} color={theme.success} />
+                <ThemedText type="smallBold" numberOfLines={1} style={styles.invoiceLabel}>
+                  Factura {payment.invoiceId}
+                </ThemedText>
+                <ThemedText type="smallBold" style={[styles.invoiceAction, { color: theme.success }]}>
+                  Ver y enviar
+                </ThemedText>
+                <Icon name="chevron.right" size={13} color={theme.success} />
+              </Pressable>
+            ) : (
+              <View style={[styles.invoiceRow, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+                <Icon name="clock.fill" size={14} color={theme.accentAlt} />
+                <ThemedText style={[styles.invoicePending, { color: theme.accentAlt }]} numberOfLines={2}>
+                  Factura en camino. Va a aparecer acá cuando esté lista.
+                </ThemedText>
+              </View>
+            )}
+          </View>
+        ) : null}
 
         {/* Sync notice hidden for now, by request. The `synced` flag is still on the order, so
             uncommenting brings it back with no other change.
@@ -255,7 +311,13 @@ export function OrderDetailSheet({
               type="smallBold"
               numberOfLines={1}
               style={[styles.actionLabel, { color: editable ? theme.onAccent : theme.textSecondary }]}>
-              {editable ? 'Editar pedido' : blocked === 'edited' ? 'Ya se editó' : 'Ya no se puede editar'}
+              {editable
+                ? 'Editar pedido'
+                : blocked === 'paid'
+                  ? 'Cobrado: no se edita'
+                  : blocked === 'edited'
+                    ? 'Ya se editó'
+                    : 'Ya no se puede editar'}
             </ThemedText>
           </Pressable>
 
@@ -282,13 +344,22 @@ export function OrderDetailSheet({
               An order that spent its edit can still be annulled, so that middle case says what is
               left rather than reading as if the whole order had closed. An already annulled one
               says so first — for that order neither clock means anything any more. */}
+          {/* A collected order gets its own two branches, because neither of the ordinary ones is
+              true of it: it is not "ya se editó" and it is not out of time — it is paid, which closes
+              editing outright and puts annulling on the payment's much shorter clock. Both branches
+              say the money moves, since that is the part the seller has to be sure of before pressing
+              anything, and the closed one names who to talk to instead of leaving a dead end. */}
           {order.status === 'anulado'
             ? 'Este pedido está anulado.'
-            : editable
-              ? `Se puede editar una sola vez o anular, por ${timeLeft} más.`
-              : annullable
-                ? `Este pedido ya se editó. Se puede anular por ${timeLeft} más.`
-                : `Los pedidos se editan o anulan dentro de las ${CHANGE_WINDOW_HOURS} horas de creados.`}
+            : payment
+              ? annullable
+                ? `Este pedido ya está cobrado, así que no se edita. Se puede anular por ${timeLeft} más y el pago se revierte.`
+                : `Este pedido está cobrado y pasó la ventana de ${PAID_ANNUL_WINDOW_MINUTES} minutos para revertir el pago. Para una devolución, hablá con la oficina.`
+              : editable
+                ? `Se puede editar una sola vez o anular, por ${timeLeft} más.`
+                : annullable
+                  ? `Este pedido ya se editó. Se puede anular por ${timeLeft} más.`
+                  : `Los pedidos se editan o anulan dentro de las ${CHANGE_WINDOW_HOURS} horas de creados.`}
         </ThemedText>
       </ScrollView>
 
@@ -300,6 +371,9 @@ export function OrderDetailSheet({
         onClose={() => setCancelVisible(false)}
         orderId={order.id}
         clientName={`${order.clientCode}-${order.clientName}`}
+        // Withdrawing a collected order sends money back, which is a materially different thing from
+        // withdrawing a promise — so the sheet that asks for a reason says so before it is confirmed.
+        refundAmount={payment ? order.total : undefined}
         onConfirm={onAnnul}
       />
     </BottomSheet>
@@ -394,6 +468,55 @@ const styles = StyleSheet.create({
   summaryLabel: {
     fontSize: 12,
     lineHeight: 16,
+  },
+  paymentCard: {
+    padding: Spacing.two,
+    borderRadius: Radius.sm,
+    gap: 6,
+  },
+  paymentHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  paymentTitle: {
+    flexShrink: 1,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  paymentWhen: {
+    flexShrink: 0,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  invoiceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 6,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+  },
+  invoiceLabel: {
+    // Takes the row and truncates, so the action beside it keeps its full width — the same division
+    // the cart's own rows make between what a thing is and what pressing it does.
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  invoiceAction: {
+    flexShrink: 0,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  invoicePending: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '600',
   },
   statusPill: {
     flexShrink: 0,

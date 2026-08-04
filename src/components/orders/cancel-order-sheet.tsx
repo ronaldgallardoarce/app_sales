@@ -7,6 +7,7 @@ import { Icon } from '@/components/ui/icon';
 import { ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { CANCEL_REASONS, orderNumberLabel, type CancelReason } from '@/data/mock-orders';
 import { useTheme } from '@/hooks/use-theme';
+import { formatBs } from '@/utils/currency';
 
 /**
  * Why an order is being annulled, asked before it is.
@@ -29,12 +30,18 @@ export function CancelOrderSheet({
   onClose,
   orderId,
   clientName,
+  refundAmount,
   onConfirm,
 }: {
   visible: boolean;
   onClose: () => void;
   orderId: number;
   clientName: string;
+  /**
+   * What goes back to the client, on an order that was collected up front. Absent on every order
+   * paid against delivery — which is the ordinary case, where withdrawing moves no money at all.
+   */
+  refundAmount?: number;
   onConfirm: (reason: CancelReason) => void;
 }) {
   const theme = useTheme();
@@ -91,6 +98,19 @@ export function CancelOrderSheet({
           {clientName}. Elegí el motivo: queda guardado en el pedido y no se puede deshacer.
         </ThemedText>
 
+        {/* Above the reasons and not beside the button, because it changes what the seller is deciding
+            rather than merely what they are about to press: on a collected order this is a refund, and
+            the amount is the fact the client will ask about. */}
+        {refundAmount !== undefined ? (
+          <View style={[styles.refundNotice, { backgroundColor: theme.dangerSoft }]}>
+            <Icon name="creditcard" size={14} color={theme.danger} />
+            <ThemedText style={[styles.refundText, { color: theme.danger }]}>
+              Este pedido ya está cobrado. Al anularlo se revierte el pago de {formatBs(refundAmount)}
+              {' '}al cliente.
+            </ThemedText>
+          </View>
+        ) : null}
+
         <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
           {CANCEL_REASONS.map((option) => {
             const active = option === reason;
@@ -140,6 +160,19 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 11,
     lineHeight: 15,
+  },
+  refundNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    padding: Spacing.two,
+    borderRadius: Radius.sm,
+  },
+  refundText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '600',
   },
   list: {
     gap: 6,

@@ -1,12 +1,14 @@
 import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
-import { useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { VisitTimer } from '@/components/client/visit-timer';
 import { DeliveryPointSheet } from '@/components/order/delivery-point-sheet';
 import { DeliveryWindowSheet } from '@/components/order/delivery-window-sheet';
 import { GiftProductSheet } from '@/components/order/gift-product-sheet';
+import { PaymentMethodSheet } from '@/components/order/payment-method-sheet';
+import { PromptPaymentModal } from '@/components/order/prompt-payment-modal';
 import { DateInputField, formatDateInput, parseDateInput } from '@/components/ui/date-input-field';
 import { ThemedText } from '@/components/themed-text';
 import { useDialog } from '@/components/ui/dialog';
@@ -19,10 +21,16 @@ import { useConnectivity } from '@/context/connectivity-context';
 import { bonificationOf, useOrderIncentives } from '@/context/order-incentives-context';
 import { useOrderSummary } from '@/context/order-summary-context';
 import { useOrders } from '@/context/orders-context';
-import { orderNumberLabel } from '@/data/mock-orders';
+import { countdownLabel, usePromptPayment } from '@/context/prompt-payment-context';
+import { orderNumberLabel, type OrderPayment } from '@/data/mock-orders';
 import { type LineBonification } from '@/data/mock-bonifications';
 import { mockProducts } from '@/data/mock-catalog';
-import { calculateIncentives, PAYMENT_METHODS, type PaymentMethod } from '@/data/mock-incentives';
+import {
+  calculateIncentives,
+  discountBreakdown,
+  PAYMENT_METHODS,
+  type PaymentMethod,
+} from '@/data/mock-incentives';
 import {
   deliveryDateLabel,
   deliveryDateOptions,
@@ -32,11 +40,15 @@ import {
   orderDetailsFor,
   toDateKey,
 } from '@/data/mock-order-details';
-import { type OrderSummaryData } from '@/components/orders/order-summary-document';
+import {
+  invoiceFromOrder,
+  type OrderSummaryData,
+} from '@/components/orders/order-summary-document';
 import { useContentInsets } from '@/hooks/use-content-insets';
 import { useTheme } from '@/hooks/use-theme';
 import type { CartLine, Product } from '@/types/catalog';
 import { iceTotalOf, lineAmount, lineIce, lineQtyDetail } from '@/utils/order';
+import { sharePdf } from '@/utils/order-summary-share';
 import { suggestionsFor } from '@/utils/suggestions';
 import { formatBs } from '@/utils/currency';
 
@@ -81,8 +93,53 @@ export default function OrderConfirmScreen() {
    * order, and presencial again the moment the seller checks in for a third.
    */
   const isRemote = clientId ? openVisitOf(clientId) === null : false;
-  const paymentMethod: PaymentMethod =
-    PAYMENT_METHODS.find((m) => m === paymentParam) ?? 'Contado';
+
+  /**
+   * The order's payment terms. State seeded from the param, not the param itself, and that is what
+   * lets a prompt payment fail here: when the reservation runs out the order has to fall back to
+   * contado without leaving the screen, and a value read straight off the route could only be
+   * changed by navigating — which would have thrown away the delivery details already filled in.
+   */
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(
+    () => PAYMENT_METHODS.find((m) => m === paymentParam) ?? 'Contado',
+  );
+  const [methodSheetVisible, setMethodSheetVisible] = useState(false);
+  const [promptModalVisible, setPromptModalVisible] = useState(false);
+  /**
+   * Whether the pricing reply on hand still describes this order. Set when the terms change under it
+   * — the seller picks different ones, or a prompt payment ends without being paid — and it is what
+   * makes re-applying an explicit step rather than something that quietly happens.
+   *
+   * Not merely "is `result` null": this screen is also reachable by reload, where there never was a
+   * reply and the local fallback is the deliberate answer. This flag is about a reply that *was*
+   * right and stopped being, which is a different situation and the only one worth blocking on.
+   */
+  const [pricingStale, setPricingStale] = useState(false);
+  /**
+   * The number a confirmed payment was filed under, and null until the money lands.
+   *
+   * Its presence is also the guard that stops the registration happening twice: the effect that
+   * writes the order runs off the session, and the session reports `paid` again every time the
+   * factura or anything else about it changes.
+   */
+  const [registeredOrderId, setRegisteredOrderId] = useState<number | null>(null);
+  const [sharingInvoice, setSharingInvoice] = useState(false);
+  /**
+   * Whether registering the order closed a visit. Captured at that moment and read when the seller
+   * finally leaves, because by then it can no longer be worked out — `markOrder` closed the visit
+   * that the answer depended on.
+   */
+  const finishedVisitRef = useRef(false);
+
+  /**
+   * The registered order and its factura, both read straight back out of the store.
+   *
+   * Derived rather than snapshotted, so the "Compartir factura" button appears the moment the effect
+   * further down writes the invoice number onto the order. One source for whether a factura exists,
+   * and it is the same one the orders list reads.
+   */
+  const registeredOrder = registeredOrderId === null ? null : findOrder(registeredOrderId);
+  const invoiceData = registeredOrder ? invoiceFromOrder(registeredOrder) : null;
 
   const details = useMemo(() => (client ? orderDetailsFor(client) : null), [client]);
   const dateOptions = useMemo(() => deliveryDateOptions(), []);
@@ -142,21 +199,48 @@ export default function OrderConfirmScreen() {
    * an error: this screen is also reachable by reload or deep link, where no request was ever
    * made, and a summary with no discount on it would be wrong rather than merely empty.
    */
-  const { result, chooseGift, reset: resetIncentives } = useOrderIncentives();
+  const {
+    result,
+    status: pricingStatus,
+    request: requestIncentives,
+    chooseGift,
+    reset: resetIncentives,
+  } = useOrderIncentives();
+  const { session: paymentSession, remainingMs, reset: resetPayment } = usePromptPayment();
   const { showSummary } = useOrderSummary();
   const incentives = useMemo(
-    () => result?.incentives ?? calculateIncentives(paymentMethod, totalAmount),
-    [result, paymentMethod, totalAmount],
+    () => result?.incentives ?? calculateIncentives(paymentMethod, totalAmount, client),
+    [result, paymentMethod, totalAmount, client],
   );
 
   const giftBonification = giftLineId === null ? null : bonificationOf(result, giftLineId);
 
-  const discountAmount = (totalAmount * incentives.discountPct) / 100;
+  /**
+   * The discount split into what always applies and what only applies while the order is being
+   * paid up front. `total` is the only part the money is calculated from; the other two exist so
+   * the screen can say which points are conditional — and, once prompt payment can expire, what
+   * the order falls back to when it does.
+   */
+  const discount = useMemo(() => discountBreakdown(incentives), [incentives]);
+
+  const discountAmount = (totalAmount * discount.total) / 100;
   const finalTotal = totalAmount - discountAmount;
 
   // Confirming registers the order, so it needs a connection; the prepedido saved
   // from the catalog panel is the offline path.
   const confirmDisabled = lines.length === 0 || offline;
+
+  /**
+   * Whether a reservation is currently being held for this order. While it is, the footer offers the
+   * way back into the collection modal instead of a way to confirm: the order cannot be registered
+   * until the money either arrives or does not.
+   */
+  const collecting =
+    paymentSession.state === 'starting' ||
+    paymentSession.state === 'awaiting' ||
+    paymentSession.state === 'verifying';
+
+  const repricing = pricingStatus === 'loading';
 
   const goBack = () => (router.canGoBack() ? router.back() : router.replace('/map' as Href));
 
@@ -255,12 +339,15 @@ export default function OrderConfirmScreen() {
    * with no `clientId`, and an order belonging to nobody is worse in the list than an order the
    * seller has to place again.
    */
-  const placeOrder = () => {
+  const placeOrder = (payment?: OrderPayment) => {
     if (!client) return;
     const takenAt = Date.now();
     const bonifications = result?.bonifications ?? [];
     addOrder({
       id: nextOrderId,
+      // Only present when the money came in before the order existed. Every other order carries
+      // nothing here, which is what "se cobra contra entrega" looks like as a record.
+      ...(payment ? { payment } : {}),
       clientId: client.id,
       clientCode: client.code,
       clientName: client.name,
@@ -292,21 +379,38 @@ export default function OrderConfirmScreen() {
    * call is over once it is placed — there is no longer a choice to stay, and nothing else on
    * this screen decides it.
    */
-  const settle = () => {
-    // Read before anything writes: `markOrder` below closes this very visit, and the
-    // destination depends on whether the seller was in one when they confirmed.
+  /**
+   * Writes the order, and nothing else.
+   *
+   * Split from leaving the screen because a collected order needs the two to happen at different
+   * moments: the money is confirmed, so the order has to exist from that instant whatever the seller
+   * does next — but they are still holding the modal, about to send a factura from it. Registering
+   * and navigating in one step would have meant either delaying the record until they tapped, or
+   * tearing the screen down while the factura was still on it.
+   *
+   * Returns what the caller needs later: the number it was filed under, and whether this closed a
+   * visit — read before `markOrder` runs, since that is what closes it.
+   */
+  const registerOrder = (payment?: OrderPayment): { orderId: number | null; finishedVisit: boolean } => {
     const finishedVisit = !editing && clientId !== undefined && openVisitOf(clientId) !== null;
 
     if (editing) {
       saveEdit();
-    } else {
-      placeOrder();
-      // Amending an order the client already placed is not a second sale, so it records nothing
-      // against the visit. On a remote order there is no open visit and this only records the
-      // sale — the close has nothing to close and is harmless.
-      if (clientId) markOrder(clientId, { closeVisit: true });
+      return { orderId: editing.id, finishedVisit: false };
     }
 
+    // Read before the write, because `nextOrderId` moves the moment the order is added.
+    const orderId = nextOrderId;
+    placeOrder(payment);
+    // Amending an order the client already placed is not a second sale, so it records nothing
+    // against the visit. On a remote order there is no open visit and this only records the
+    // sale — the close has nothing to close and is harmless.
+    if (clientId) markOrder(clientId, { closeVisit: true });
+    return { orderId, finishedVisit };
+  };
+
+  /** Clears what belonged to this order and goes wherever the seller belongs next. */
+  const leave = (finishedVisit: boolean) => {
     // Dropped alongside the lines, not after them: the reply is keyed by product code,
     // so a next order containing the same product would otherwise inherit this
     // order's free goods. Both are scoped to the order just saved — a draft the seller
@@ -360,6 +464,141 @@ export default function OrderConfirmScreen() {
             } as Href)
           : ('/map' as Href),
     );
+  };
+
+  /** Registering and leaving in one go — what confirming a contado order has always done. */
+  const settle = (payment?: OrderPayment) => {
+    const { finishedVisit } = registerOrder(payment);
+    leave(finishedVisit);
+  };
+
+  /**
+   * Changing the terms invalidates the price, so it says so instead of leaving a total on screen
+   * that belongs to terms nobody chose any more. The reply is dropped along with it: it carried the
+   * old discount *and* the free goods that came with it, and keeping half of it would be worse than
+   * keeping none.
+   */
+  const changePaymentMethod = (method: PaymentMethod) => {
+    if (method === paymentMethod) return;
+    setPaymentMethod(method);
+    resetIncentives();
+    setPricingStale(true);
+  };
+
+  /**
+   * Re-resolves the order at the terms now selected — the same call the cart's own button makes.
+   *
+   * It has to be a deliberate tap and not something this screen does on its own, because the reply
+   * carries the bonifications: pricing silently in the background would let the seller confirm in
+   * the half-second before the free goods came back, and register an order missing them.
+   */
+  const reprice = async () => {
+    const resolved = await requestIncentives(lines, paymentMethod, totalAmount, client);
+    if (!resolved) {
+      dialog.show({
+        icon: 'exclamationmark.circle',
+        tone: 'danger',
+        title: 'No se pudieron recalcular los descuentos',
+        message: 'No hubo respuesta del servicio. Revisá la conexión y volvé a intentarlo.',
+      });
+      return;
+    }
+    setPricingStale(false);
+  };
+
+  /**
+   * Sends the factura as a PDF, straight from the collection modal.
+   *
+   * Read off the stored order rather than rebuilt from what is on screen: by this point the order is
+   * the record, and building a second version of the same document from the cart is how the paper
+   * the client keeps ends up disagreeing with the order the office has.
+   */
+  const handleShareInvoice = async () => {
+    if (!invoiceData || sharingInvoice) return;
+    setSharingInvoice(true);
+    try {
+      await sharePdf(invoiceData);
+    } catch {
+      dialog.show({
+        icon: 'exclamationmark.circle',
+        tone: 'danger',
+        title: 'No se pudo compartir la factura',
+        message: 'Volvé a intentarlo. La factura queda guardada en el pedido.',
+      });
+    } finally {
+      setSharingInvoice(false);
+    }
+  };
+
+  /** Done with a collected order: it is already registered, so this only leaves. */
+  const handleDone = () => {
+    setPromptModalVisible(false);
+    resetPayment();
+    leave(finishedVisitRef.current);
+  };
+
+  /**
+   * A confirmed payment registers the order by itself.
+   *
+   * There is nothing left to decide once the money is in — the terms, the products and the delivery
+   * were all agreed before the QR was generated — so asking the seller to press "registrar pedido"
+   * would be asking them to confirm something that has already happened. Worse, it would mean a
+   * collected payment sitting against no order for as long as they took to notice the button.
+   *
+   * Only ever once, guarded by `registeredOrderId`.
+   */
+  useEffect(() => {
+    if (editing || paymentSession.state !== 'paid' || registeredOrderId !== null) return;
+
+    const { orderId, finishedVisit } = registerOrder({
+      paidAtMs: paymentSession.paidAtMs,
+      intentId: paymentSession.intent.id,
+      invoiceId: paymentSession.invoiceId,
+    });
+    if (orderId === null) return;
+
+    finishedVisitRef.current = finishedVisit;
+    setRegisteredOrderId(orderId);
+    // `registerOrder` closes over half this screen and is rebuilt every render; listing it would
+    // re-run this on keystrokes in the notes field. The `paid` state and the guard above are the
+    // real trigger, and both are named.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, paymentSession, registeredOrderId]);
+
+  /**
+   * The factura is deliberately not written here.
+   *
+   * It arrives a moment after the money, and this screen is exactly the wrong place to be waiting for
+   * it: the seller may well have left. `PendingInvoiceSync`, mounted above the navigator, fills it in
+   * on any order that is paid and still missing one — including this one, while the modal is still
+   * open. One writer, so the number cannot be written twice or missed once.
+   */
+
+  /**
+   * Nothing was collected — the window ran out, the payment was refused, or the seller gave up.
+   *
+   * The order does not go back to the catalog and nothing about the products or the delivery is
+   * touched. What changes is the terms: back to contado, which grants none of the points pronto pago
+   * did, so the price on screen is now wrong and has to be resolved again before anything can be
+   * confirmed.
+   */
+  const handleGiveUp = () => {
+    setPromptModalVisible(false);
+    // Back to idle, so choosing pronto pago again opens a fresh QR rather than reopening onto the
+    // ending this one had.
+    resetPayment();
+    setPaymentMethod('Contado');
+    resetIncentives();
+    setPricingStale(true);
+  };
+
+  /** Contado registers straight away; pronto pago has to be collected first. */
+  const handleConfirmPress = () => {
+    if (!editing && paymentMethod === 'Pronto pago') {
+      setPromptModalVisible(true);
+      return;
+    }
+    confirm();
   };
 
   const confirm = () => {
@@ -437,6 +676,40 @@ export default function OrderConfirmScreen() {
             </ThemedText>
           </View>
         </View>
+        {/* Pinned under the client, and that is the point: the payment terms are the other half of
+            "am I on the right client, on the right terms?" — the question this whole block answers —
+            and they were the half you had to switch tabs and scroll to find. They also decide the
+            total, so a seller reading the order back has them on screen whichever half they are on.
+
+            Compact deliberately: one line, small type, no caption. It is a fact to check at a glance
+            and only occasionally a thing to change, so it must not compete with the client above it
+            or the tabs below.
+
+            Read-only while amending a placed order. An order collected up front was paid for an
+            amount its lines no longer add up to, and deciding what happens to that money is not
+            something this screen can do — the edit gate is where that belongs. */}
+        <Pressable
+          disabled={!!editing || collecting}
+          onPress={() => setMethodSheetVisible(true)}
+          style={[
+            styles.methodRow,
+            {
+              backgroundColor: theme.backgroundElement,
+              borderColor: editing || collecting ? theme.border : theme.accent,
+            },
+          ]}>
+          <Icon name="cash" size={13} color={editing || collecting ? theme.textSecondary : theme.accent} />
+          <ThemedText themeColor="textSecondary" style={styles.methodCaption}>
+            Pago
+          </ThemedText>
+          <ThemedText type="smallBold" numberOfLines={1} style={styles.methodValue}>
+            {paymentMethod}
+          </ThemedText>
+          {editing || collecting ? null : (
+            <Icon name="chevron.down" size={12} color={theme.textSecondary} />
+          )}
+        </Pressable>
+
         {/* Pinned with the client card and above the scroll, because a switch that scrolls away
             stops being a way back: the point of the split is that either half stays one tap from
             the other, at any depth in either of them. */}
@@ -463,7 +736,7 @@ export default function OrderConfirmScreen() {
           ) : (
             lines.map((line) => {
               const amount = lineAmount(line);
-              const lineDiscount = (amount * incentives.discountPct) / 100;
+              const lineDiscount = (amount * discount.total) / 100;
               return (
                 <View
                   key={String(line.productId)}
@@ -526,8 +799,23 @@ export default function OrderConfirmScreen() {
             <TotalRow label="ICE" value={formatBs(iceTotal)} />
             <TotalRow label="Pago" value={paymentMethod} />
             <TotalRow label="Subtotal" value={formatBs(totalAmount)} />
-            {/* Just "Descuento" and an amount. The reasons behind it carried their own
-                percentages, which is exactly what was asked to come out. */}
+
+            {/* The percentages are itemised again, and this is why: they are no longer all the same
+                kind of thing. The client's list and the volume are settled, and the pronto pago
+                points only stand while the payment does — so a single "Descuento" figure would be
+                hiding which part of it is conditional, which is precisely the part the seller has to
+                be able to point at. Tinted like the panel's pronto pago notice so the conditional
+                row is recognisable before it is read. */}
+            {incentives.components.map((component) => (
+              <TotalRow
+                key={component.label}
+                label={component.label}
+                value={`${component.pct}%`}
+                tone={component.fromPromptPayment ? theme.accentAlt : undefined}
+              />
+            ))}
+
+            {/* What those percentages come to in money — the figure the client argues about. */}
             {discountAmount > 0 ? (
               <TotalRow label="Descuento" value={`−${formatBs(discountAmount)}`} tone={theme.accent} />
             ) : null}
@@ -712,6 +1000,19 @@ export default function OrderConfirmScreen() {
           </View>
         ) : null}
 
+        {/* Explains the button under it, which is why it lives beside it and not up in the form: the
+            total on screen no longer belongs to the terms now selected, and nothing is confirmable
+            until the service says what this order is actually worth. */}
+        {pricingStale && !collecting ? (
+          <View style={[styles.notice, { backgroundColor: theme.accentAltSoft }]}>
+            <Icon name="exclamationmark.circle" size={14} color={theme.accentAlt} />
+            <ThemedText style={[styles.noticeText, { color: theme.accentAlt }]}>
+              Cambió el método de pago: hay que volver a aplicar descuentos y bonificaciones antes de
+              confirmar.
+            </ThemedText>
+          </View>
+        ) : null}
+
         {/**
           * The primary action belongs to the half being read, and confirming is only offered from
           * the second one.
@@ -757,7 +1058,54 @@ export default function OrderConfirmScreen() {
           <Icon name="chevron.right" size={13} color={theme.accent} />
         </Pressable>
 
-        {tab === 'items' ? (
+        {/* The two states that outrank the tabs come first, and both for the same reason: neither is
+            about which half of the form is being read.
+
+            A running collection is the only thing that can happen next whatever tab is open, and a
+            price that no longer matches the terms blocks confirming from either half — so offering
+            "Continuar" on the products tab would have walked the seller to a button that was going to
+            refuse them anyway. This is also what the notice above is explaining, and the notice was
+            already on both tabs while the button was not. */}
+        {collecting ? (
+          /* A reservation is running with the collection modal somehow not on screen.
+
+             Unreachable through the interface as it stands: the modal cannot be dismissed, so while a
+             payment is being collected it is always the thing in front. Kept anyway, because the state
+             it covers is the one worth never getting wrong — a live reservation with no way back to it
+             is ten minutes of stock held for an order the seller can no longer reach. It says what is
+             happening and carries the countdown, rather than offering a confirm button that would
+             refuse or a "cobrar" button for a cobro already under way. */
+          <Pressable
+            onPress={() => setPromptModalVisible(true)}
+            style={[styles.confirmButton, { backgroundColor: theme.accentAlt }]}>
+            <Icon name="clock.fill" size={16} color={theme.onAccentAlt} />
+            <ThemedText type="smallBold" style={{ color: theme.onAccentAlt }}>
+              {paymentSession.state === 'awaiting'
+                ? `Cobro en curso · ${countdownLabel(remainingMs)}`
+                : 'Cobro en curso · Verificando…'}
+            </ThemedText>
+          </Pressable>
+        ) : pricingStale ? (
+          /* Nothing can be confirmed against a price that belongs to terms that changed. Same label
+             and same shape as the cart's own button, because it is the same call — a seller who has
+             seen it there should recognise it here rather than learn a second control. */
+          <Pressable
+            disabled={confirmDisabled || repricing}
+            onPress={() => void reprice()}
+            style={[
+              styles.confirmButton,
+              { backgroundColor: theme.accent, opacity: confirmDisabled || repricing ? 0.4 : 1 },
+            ]}>
+            {repricing ? (
+              <ActivityIndicator size="small" color={theme.onAccent} />
+            ) : (
+              <Icon name="cash" size={16} color={theme.onAccent} />
+            )}
+            <ThemedText type="smallBold" numberOfLines={1} style={{ color: theme.onAccent }}>
+              {repricing ? 'Consultando descuentos…' : 'Aplicar descuentos y bonificaciones'}
+            </ThemedText>
+          </Pressable>
+        ) : tab === 'items' ? (
           <Pressable
             onPress={() => showTab('details')}
             style={[styles.confirmButton, { backgroundColor: theme.accent }]}>
@@ -766,10 +1114,26 @@ export default function OrderConfirmScreen() {
             </ThemedText>
             <Icon name="chevron.right" size={16} color={theme.onAccent} />
           </Pressable>
+        ) : !editing && paymentMethod === 'Pronto pago' ? (
+          /* Accent and not the green of "Confirmar pedido", following what those two colours already
+             mean on this screen: this one advances to the collection, it does not commit the order.
+             The order gets registered by the modal this opens, and only once the money is in. */
+          <Pressable
+            disabled={confirmDisabled}
+            onPress={handleConfirmPress}
+            style={[
+              styles.confirmButton,
+              { backgroundColor: theme.accent, opacity: confirmDisabled ? 0.4 : 1 },
+            ]}>
+            <Icon name="creditcard" size={16} color={theme.onAccent} />
+            <ThemedText type="smallBold" numberOfLines={1} style={{ color: theme.onAccent }}>
+              Cobrar pronto pago · {formatBs(finalTotal)}
+            </ThemedText>
+          </Pressable>
         ) : (
           <Pressable
             disabled={confirmDisabled}
-            onPress={confirm}
+            onPress={handleConfirmPress}
             style={[
               styles.confirmButton,
               { backgroundColor: theme.success, opacity: confirmDisabled ? 0.4 : 1 },
@@ -781,6 +1145,27 @@ export default function OrderConfirmScreen() {
           </Pressable>
         )}
       </View>
+
+      <PaymentMethodSheet
+        visible={methodSheetVisible}
+        onClose={() => setMethodSheetVisible(false)}
+        selected={paymentMethod}
+        onSelect={changePaymentMethod}
+      />
+
+      {/* Raised from this screen and not from the footer button, so it survives the seller closing it
+          to look at the order: the reservation lives in its provider, and this is only the window
+          onto it. */}
+      <PromptPaymentModal
+        visible={promptModalVisible}
+        amountBs={finalTotal}
+        orderLabel={registeredOrderId === null ? null : orderNumberLabel(registeredOrderId)}
+        invoiceReady={invoiceData !== null}
+        sharingInvoice={sharingInvoice}
+        onShareInvoice={() => void handleShareInvoice()}
+        onDone={handleDone}
+        onGiveUp={handleGiveUp}
+      />
 
       <DeliveryPointSheet
         visible={pointSheetVisible}
@@ -1292,6 +1677,28 @@ const styles = StyleSheet.create({
   },
   optionLabel: {
     fontSize: 12,
+  },
+  /** Shorter than a form field on purpose: this is a status line that happens to be tappable. */
+  methodRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 30,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+    paddingHorizontal: Spacing.two,
+  },
+  methodCaption: {
+    fontSize: 10,
+    lineHeight: 14,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  methodValue: {
+    // Takes the slack so the chevron stays pinned to the right edge.
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 16,
   },
   input: {
     minHeight: ControlHeight.input,
