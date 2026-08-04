@@ -7,7 +7,7 @@ import { ThemedText } from '@/components/themed-text';
 import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { Icon } from '@/components/ui/icon';
 import { Radius, Spacing } from '@/constants/theme';
-import { useClientVisits } from '@/context/client-visit-context';
+import { useClientVisits, visitEarnedClose } from '@/context/client-visit-context';
 import { useTheme } from '@/hooks/use-theme';
 
 /**
@@ -35,8 +35,8 @@ export function ActiveVisitBar() {
   const rows = openVisits.map(({ clientId, visit }) => ({
     clientId,
     name: clients.find((c) => c.id === clientId)?.name ?? 'Cliente',
-    /** A visit that sold or worked can be closed from here; one that did neither owes a reason. */
-    productive: visit.activity.ordered || visit.activity.tasksDone,
+    /** A visit that sold can be closed from here; anything else owes a reason. */
+    productive: visitEarnedClose(visit.activity),
   }));
 
   const visible = rows.length > 0;

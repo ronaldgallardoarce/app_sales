@@ -9,7 +9,7 @@ import { deliveryDateLabel } from '@/data/mock-order-details';
 import { orderNumberLabel, type PlacedOrder } from '@/data/mock-orders';
 import { useTheme } from '@/hooks/use-theme';
 import type { CartLine } from '@/types/catalog';
-import { formatBs } from '@/utils/currency';
+import { formatAmount, formatBs } from '@/utils/currency';
 
 /**
  * Everything the summary shows, gathered by whoever opens it.
@@ -67,8 +67,11 @@ export function summaryFromOrder(order: PlacedOrder): OrderSummaryData {
 export type SummaryRow = {
   key: string;
   name: string;
+  /** The line's minimum unit. Cases are counted in it, so it describes the whole quantity. */
   unit: string;
+  /** Always in minimum units — a case counts as everything inside it. */
   qty: number;
+  /** Per minimum unit, the rate `qty` is counted in. */
   price: number;
   ice: number;
   discount: number;
@@ -88,49 +91,38 @@ function discountRateOf(data: OrderSummaryData): number {
 }
 
 /**
- * Splits each ordered line into one row per unit it was ordered in.
+ * One row per ordered product, with the quantity counted in minimum units.
  *
- * A line of two cases and six loose pieces is two prices and two quantities, and squeezing it into
- * one row forces a choice of which unit price to print — either one is wrong for half the line.
- * Split, every row carries a quantity, its own rate and what the two multiply to, which is what
- * makes the arithmetic checkable by the person being shown it.
+ * A line of two cases and six loose pieces used to print as two rows, so that each could carry
+ * the unit price it was sold at. Cases now resolve into what they contain — 2 × 12 + 6 = 30 —
+ * which is the count the client checks against what comes off the truck, and it leaves one row
+ * per product instead of two rows wearing the same name.
+ *
+ * That leaves one rate for the whole line, not two: the case price is `priceUnidad × unitsPerCase`
+ * (`mock-catalog.ts`), a quantity applied to the same unit price rather than a second tariff. Both
+ * factors have at most two decimals, so `qty × price` lands back on the importe exactly — the
+ * multiplication the client checks with a calculator holds.
  */
 export function toRows(data: OrderSummaryData): SummaryRow[] {
-  const rows: SummaryRow[] = [];
   const rate = discountRateOf(data);
 
-  data.lines.forEach((line) => {
-    if (line.qtyMax > 0) {
-      const amount = line.qtyMax * line.unitPriceMax;
-      rows.push({
-        key: `${line.productId}-max`,
-        name: line.productName,
-        unit: line.maxUnitLabel,
-        qty: line.qtyMax,
-        price: line.unitPriceMax,
-        // ICE is charged per minimum unit, so a case owes it for everything it contains.
-        ice: line.qtyMax * line.unitsPerCase * line.ice,
-        discount: amount * rate,
-        amount,
-      });
-    }
-
-    if (line.qtyMin > 0) {
-      const amount = line.qtyMin * line.unitPriceMin;
-      rows.push({
-        key: `${line.productId}-min`,
+  return data.lines
+    .map((line) => {
+      const qty = line.qtyMax * line.unitsPerCase + line.qtyMin;
+      const amount = line.qtyMax * line.unitPriceMax + line.qtyMin * line.unitPriceMin;
+      return {
+        key: String(line.productId),
         name: line.productName,
         unit: line.minUnitLabel,
-        qty: line.qtyMin,
+        qty,
         price: line.unitPriceMin,
-        ice: line.qtyMin * line.ice,
+        // ICE is charged per minimum unit, which is exactly what `qty` now counts.
+        ice: qty * line.ice,
         discount: amount * rate,
         amount,
-      });
-    }
-  });
-
-  return rows;
+      };
+    })
+    .filter((row) => row.qty > 0);
 }
 
 /**
@@ -184,9 +176,16 @@ export function OrderSummaryDocument({ data }: { data: OrderSummaryData }) {
         <View style={[styles.headRow, { backgroundColor: theme.accent }]}>
           <ThemedText style={[styles.headCell, styles.colName, { color: theme.onAccent }]}>Producto</ThemedText>
           <ThemedText style={[styles.headCell, styles.colQty, { color: theme.onAccent }]}>Cant</ThemedText>
-          <ThemedText style={[styles.headCell, styles.colIce, { color: theme.onAccent }]}>ICE</ThemedText>
-          <ThemedText style={[styles.headCell, styles.colDiscount, { color: theme.onAccent }]}>Desc.</ThemedText>
-          <ThemedText style={[styles.headCell, styles.colAmount, { color: theme.onAccent }]}>Importe</ThemedText>
+          {/* The currency rides in the heading, once per column, instead of on every figure
+              underneath it: four columns of numbers are read by comparing them down the page,
+              and a repeated "Bs." on each one is four characters of noise per row.
+              It sits on a second line so the heading never decides the column width — with five
+              numeric columns on a phone, every pixel a heading takes is one the product name
+              loses, and the name is the only cell here that gets read rather than scanned. */}
+          <ThemedText style={[styles.headCell, styles.colPrice, { color: theme.onAccent }]}>{'Precio\nBs'}</ThemedText>
+          <ThemedText style={[styles.headCell, styles.colIce, { color: theme.onAccent }]}>{'ICE\nBs'}</ThemedText>
+          <ThemedText style={[styles.headCell, styles.colDiscount, { color: theme.onAccent }]}>{'Desc.\nBs'}</ThemedText>
+          <ThemedText style={[styles.headCell, styles.colAmount, { color: theme.onAccent }]}>{'Importe\nBs'}</ThemedText>
         </View>
 
         {rows.map((row, index) => (
@@ -201,26 +200,23 @@ export function OrderSummaryDocument({ data }: { data: OrderSummaryData }) {
             <ThemedText type="smallBold" numberOfLines={2} style={[styles.cellName, styles.colName]}>
               {row.name}
             </ThemedText>
-            {/* The unit belongs to the quantity, and this is the only place left that carries it.
-                A line ordered as both cases and loose pieces splits into two rows with the same
-                name, and a bare "2" over a bare "6" gives no way to tell which is which. */}
-            <View style={styles.colQty}>
-              <ThemedText type="smallBold" style={styles.cellQty}>
-                {row.qty}
-              </ThemedText>
-              <ThemedText themeColor="textSecondary" numberOfLines={1} style={styles.cellUnit}>
-                {row.unit}
-              </ThemedText>
-            </View>
+            {/* A bare count, with no unit beside it: every quantity on this table is in the
+                product's minimum unit, so the label was the same word on every row of a line. */}
+            <ThemedText type="smallBold" style={[styles.cellQty, styles.colQty]}>
+              {row.qty}
+            </ThemedText>
+            <ThemedText themeColor="textSecondary" style={[styles.cell, styles.colPrice]}>
+              {formatAmount(row.price)}
+            </ThemedText>
             <ThemedText themeColor="textSecondary" style={[styles.cell, styles.colIce]}>
-              {formatBs(row.ice)}
+              {formatAmount(row.ice)}
             </ThemedText>
             <ThemedText
               style={[styles.cell, styles.colDiscount, { color: row.discount > 0 ? theme.accent : theme.textSecondary }]}>
-              {row.discount > 0 ? `−${formatBs(row.discount)}` : '—'}
+              {row.discount > 0 ? `−${formatAmount(row.discount)}` : '—'}
             </ThemedText>
             <ThemedText type="smallBold" style={[styles.cell, styles.colAmount]}>
-              {formatBs(row.amount)}
+              {formatAmount(row.amount)}
             </ThemedText>
           </View>
         ))}
@@ -379,7 +375,9 @@ const styles = StyleSheet.create({
   },
   headRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    // Bottom, not centre: the one-line "Cant" has to sit on the same line as the "Bs" of its
+    // neighbours, or it floats in the middle of the band on its own.
+    alignItems: 'flex-end',
     gap: 4,
     paddingHorizontal: Spacing.two,
     paddingVertical: 5,
@@ -401,20 +399,26 @@ const styles = StyleSheet.create({
   colName: {
     flex: 1,
   },
+  // Sized to the widest figure each column can hold, not to its heading — the two-line headings
+  // exist so that stays true. What is left over goes to the product name.
   colQty: {
-    width: 42,
+    width: 32,
+    textAlign: 'right',
+  },
+  colPrice: {
+    width: 46,
     textAlign: 'right',
   },
   colIce: {
-    width: 52,
+    width: 36,
     textAlign: 'right',
   },
   colDiscount: {
-    width: 54,
+    width: 42,
     textAlign: 'right',
   },
   colAmount: {
-    width: 62,
+    width: 52,
     textAlign: 'right',
   },
   colGiftQty: {
@@ -435,11 +439,6 @@ const styles = StyleSheet.create({
     lineHeight: 14,
     textAlign: 'right',
     fontVariant: ['tabular-nums'],
-  },
-  cellUnit: {
-    fontSize: 9,
-    lineHeight: 12,
-    textAlign: 'right',
   },
   totals: {
     borderRadius: Radius.sm,

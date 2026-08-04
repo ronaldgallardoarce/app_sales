@@ -9,6 +9,23 @@ export type ExitRecord = { reason: string; photos: string[] };
 export type VisitActivity = { tasksDone: boolean; ordered: boolean };
 
 /**
+ * Whether a visit may be closed with one tap and no explanation.
+ *
+ * Only an order earns that. A completed task is real work and stays on the record as such — an
+ * exceptional exit from a visit with tasks still leaves the client "trabajado", not
+ * "cerrado-observado" — but it is not what the seller came to do. "I left without selling because
+ * I did a task" is precisely the sentence supervision needs to read in the seller's own words,
+ * and a green button that closes the visit silently is what stops it ever being written.
+ *
+ * Exported and used by every caller instead of each screen spelling the condition out: this rule
+ * used to live in three places, and the exit bar and the client screen could disagree about which
+ * of the two exits the seller was owed.
+ */
+export function visitEarnedClose(activity: VisitActivity | undefined): boolean {
+  return activity?.ordered ?? false;
+}
+
+/**
  * One on-site visit: opened by a check-in, closed by an order or an exceptional exit.
  *
  * A list of these per client rather than a single pair of timestamps, because a seller can come
@@ -282,22 +299,17 @@ export function ClientVisitProvider({ children }: { children: ReactNode }) {
   );
 
   /**
-   * Ends a visit that already did its job — an order was placed, or a task was completed. No
-   * reason and no photo, because there is nothing to explain: the order is the evidence.
+   * Ends a visit that already did its job. No reason and no photo, because there is nothing to
+   * explain: the order is the evidence, and it is the only thing that counts as one.
    *
-   * Refuses a visit with nothing on it. Leaving a client without selling or doing anything is
-   * exactly what supervision reads the justifications for, so that case has to go through
+   * Refuses anything else. A visit that leaves without an order goes through
    * `markExceptionalExit` and cannot be waved through from a one-tap button.
    */
   const markVisitDone = useCallback(
     (clientId: string) => {
-      const activity = openVisitOf(clientId)?.activity;
-      if (!activity || (!activity.ordered && !activity.tasksDone)) return;
+      if (!visitEarnedClose(openVisitOf(clientId)?.activity)) return;
       updateOpenVisit(clientId, (visit) => ({ ...visit, endedAt: Date.now() }));
-      setStatuses((prev) => ({
-        ...prev,
-        [clientId]: activity.ordered ? 'visitado' : 'trabajado',
-      }));
+      setStatuses((prev) => ({ ...prev, [clientId]: 'visitado' }));
     },
     [openVisitOf, updateOpenVisit],
   );

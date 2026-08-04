@@ -4,7 +4,7 @@ import * as Sharing from 'expo-sharing';
 import { Linking, Share } from 'react-native';
 
 import { toRows, type OrderSummaryData } from '@/components/orders/order-summary-document';
-import { formatBs } from '@/utils/currency';
+import { formatAmount, formatBs } from '@/utils/currency';
 
 /**
  * A filename the person receiving it can read.
@@ -56,6 +56,8 @@ export function asText(data: OrderSummaryData): string {
     ...data.meta.map((item) => `${item.label}: ${item.value}`),
     '',
     'PRODUCTOS',
+    // The unit stays spelled out here, unlike the tables: a chat message has no column heading
+    // above it to say what the number counts.
     ...rows.map((row) => {
       const line = `• ${row.name} — ${row.qty} ${row.unit} × ${formatBs(row.price)} = ${formatBs(row.amount)}`;
       return row.discount > 0 ? `${line} (desc. −${formatBs(row.discount)})` : line;
@@ -101,13 +103,11 @@ export function asHtml(data: OrderSummaryData): string {
       (row) => `
         <tr>
           <td><strong>${escapeHtml(row.name)}</strong></td>
-          <td class="num">
-            ${row.qty}
-            <div class="detail">${escapeHtml(row.unit)}</div>
-          </td>
-          <td class="num">${formatBs(row.ice)}</td>
-          <td class="num discount">${row.discount > 0 ? `−${formatBs(row.discount)}` : '—'}</td>
-          <td class="num"><strong>${formatBs(row.amount)}</strong></td>
+          <td class="num">${row.qty}</td>
+          <td class="num">${formatAmount(row.price)}</td>
+          <td class="num">${formatAmount(row.ice)}</td>
+          <td class="num discount">${row.discount > 0 ? `−${formatAmount(row.discount)}` : '—'}</td>
+          <td class="num"><strong>${formatAmount(row.amount)}</strong></td>
         </tr>`,
     )
     .join('');
@@ -150,18 +150,17 @@ export function asHtml(data: OrderSummaryData): string {
       .meta div { font-size: 11px; }
       .meta span { color: #6B7280; }
       table { width: 100%; border-collapse: collapse; border: 1px solid #E3E6EA; border-radius: 6px; overflow: hidden; }
-      thead th { background: #4F46E5; color: #FFFFFF; font-size: 9px; text-transform: uppercase; letter-spacing: 0.4px; text-align: left; padding: 6px 8px; }
-      .gift-table { border-color: #16A34A; }
-      .gift-table thead th { background: #DCF6EC; color: #16A34A; }
+      thead th { background: #1873AF; color: #FFFFFF; font-size: 9px; text-transform: uppercase; letter-spacing: 0.4px; text-align: left; padding: 6px 8px; }
+      .gift-table { border-color: #2C8069; }
+      .gift-table thead th { background: #E4F4EF; color: #2C8069; }
       tbody td { padding: 6px 8px; border-top: 1px solid #E3E6EA; vertical-align: top; }
       .num { text-align: right; white-space: nowrap; }
-      .detail { color: #6B7280; font-size: 9px; margin-top: 1px; }
-      .discount { color: #4F46E5; }
-      .gift { color: #16A34A; }
+      .discount { color: #1873AF; }
+      .gift { color: #2C8069; }
       .totals { margin-top: 8px; border: 1px solid #E3E6EA; }
       .totals td { border-top: none; padding: 4px 8px; }
       .totals .rule td { border-top: 1px solid #E3E6EA; }
-      .totals .grand td { font-size: 15px; font-weight: 700; color: #16A34A; }
+      .totals .grand td { font-size: 15px; font-weight: 700; color: #2C8069; }
     </style>
   </head>
   <body>
@@ -174,7 +173,7 @@ export function asHtml(data: OrderSummaryData): string {
     <h2>Productos</h2>
     <table>
       <thead>
-        <tr><th>Producto</th><th class="num">Cant</th><th class="num">ICE</th><th class="num">Desc.</th><th class="num">Importe</th></tr>
+        <tr><th>Producto</th><th class="num">Cant</th><th class="num">Precio Bs</th><th class="num">ICE Bs</th><th class="num">Desc. Bs</th><th class="num">Importe Bs</th></tr>
       </thead>
       <tbody>${productRows}</tbody>
     </table>

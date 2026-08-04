@@ -18,7 +18,7 @@ import { PhotoPicker } from '@/components/ui/photo-picker';
 import { ChipPadding, ControlHeight, Radius, Spacing } from '@/constants/theme';
 import { CHANNEL_META, CLIENT_STATE_META, EXIT_REASONS, REMOTE_REASONS, STATUS_META } from '@/data/mock-clients';
 import { mockSeller } from '@/data/mock-user';
-import { useClientVisits } from '@/context/client-visit-context';
+import { useClientVisits, visitEarnedClose } from '@/context/client-visit-context';
 import { useOrderSummary } from '@/context/order-summary-context';
 import { useOrders } from '@/context/orders-context';
 import { useContentInsets } from '@/hooks/use-content-insets';
@@ -202,13 +202,8 @@ export default function ClientDetailScreen() {
   const willBeWorked = openVisit?.activity.tasksDone ?? false;
   const canConfirmExit = exitReason !== null && exitPhotos.length > 0;
 
-  /**
-   * Whether the visit has anything to show for itself. It decides which of the two exits the
-   * seller gets, and the two are different acts rather than the same one with a shortcut: a visit
-   * that sold or worked ends normally and owes no explanation, while one that did neither is the
-   * exception supervision reads the reasons for.
-   */
-  const visitProductive = (openVisit?.activity.ordered || openVisit?.activity.tasksDone) ?? false;
+  /** Which of the two exits the seller is owed. The rule itself lives with the visit state. */
+  const visitProductive = visitEarnedClose(openVisit?.activity);
 
   // Debt tones. Only meaningful when the client actually owes money — a debt-free
   // client shows no alarm color and no due-date gradient.
@@ -607,10 +602,10 @@ export default function ClientDetailScreen() {
                     </ThemedText>
                     <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
                       {visitProductive
-                        ? openVisit.activity.ordered
-                          ? 'Pedido registrado · sin justificación'
-                          : 'Tareas realizadas · sin justificación'
-                        : 'Salida excepcional · requiere justificación'}
+                        ? 'Pedido registrado · sin justificación'
+                        : openVisit.activity.tasksDone
+                          ? 'Tareas realizadas, sin pedido · requiere justificación'
+                          : 'Salida excepcional · requiere justificación'}
                     </ThemedText>
                   </View>
                   <Icon

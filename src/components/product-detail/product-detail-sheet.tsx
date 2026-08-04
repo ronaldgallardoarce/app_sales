@@ -258,15 +258,16 @@ export function ProductDetailSheet({
               Toca uno para cargar sus cantidades
             </ThemedText>
 
+            {/* Same panel as the detail view's suggestions block: with several axes stacked, a
+                heading alone was not enough to tell where one set of options ended and the next
+                began. The tint also lifts the cards, which are `backgroundElement` and would
+                otherwise sit on their own color. */}
             {relatedSections.map(({ axis, products }) => (
-              <View key={axis} style={styles.section}>
+              <View key={axis} style={[styles.suggestionsPanel, { backgroundColor: theme.background }]}>
                 <ThemedText style={[styles.axisHeading, { color: theme.textSecondary }]}>
                   {AXIS_LABELS[axis]}
                 </ThemedText>
-                {/* No panel here, unlike the detail view: this whole screen is suggestions,
-                    so a panel per axis would separate nothing from nothing. The strip fades
-                    into the sheet's own surface. */}
-                <SuggestionStrip fadeTo={theme.backgroundElement}>
+                <SuggestionStrip fadeTo={theme.background}>
                   {products.map((suggestion) => (
                     <SuggestionCard
                       key={String(suggestion.id)}
