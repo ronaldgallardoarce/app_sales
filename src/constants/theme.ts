@@ -7,6 +7,19 @@ import '@/global.css';
 
 import { Platform } from 'react-native';
 
+/**
+ * The accent ramp is the Deal logo's blue (`assets/deal.jpg`, `#1D80C4`), one step darker.
+ *
+ * The raw brand blue only reaches 4.25:1 against white and 3.97:1 against the light background,
+ * and `accent` is not just a button fill here — it is the color of prices and totals, which are
+ * body-sized text. Darkening it to `#1873AF` buys 5.11:1 / 4.77:1 and clears WCAG AA at the same
+ * hue, so it still reads as the logo. The navy `#1C2747` and the green `#4AB597` from the same
+ * logo are already spoken for. The navy is the splash and icon background in `app.json`. The green
+ * became the `success` family — not a new hue on the palette, the one that was already there
+ * retuned to the brand's: `#4AB597` itself is only 2.52:1 on white, so light mode darkens it to
+ * `#2C8069` (4.77:1), which also happens to fix the old `#16A34A` that never cleared 3.3:1 while
+ * being the colour of the order total. Dark mode keeps the raw logo green as the pressed state.
+ */
 export const Colors = {
   light: {
     text: '#14171B',
@@ -14,16 +27,16 @@ export const Colors = {
     backgroundElement: '#FFFFFF',
     backgroundSelected: '#E9ECF0',
     textSecondary: '#6B7280',
-    accent: '#4F46E5',
-    accentPressed: '#4338CA',
-    accentSoft: '#EEEEFD',
+    accent: '#1873AF',
+    accentPressed: '#145F92',
+    accentSoft: '#EAF5FC',
     onAccent: '#FFFFFF',
     accentAlt: '#F2762E',
     accentAltSoft: '#FDE8DA',
     onAccentAlt: '#FFFFFF',
-    success: '#16A34A',
-    successPressed: '#0E8A3E',
-    successSoft: '#DCF6EC',
+    success: '#2C8069',
+    successPressed: '#236B58',
+    successSoft: '#E4F4EF',
     onSuccess: '#FFFFFF',
     violet: '#7C3AED',
     violetSoft: '#EDE6FC',
@@ -38,16 +51,16 @@ export const Colors = {
     backgroundElement: '#1C1D20',
     backgroundSelected: '#25272B',
     textSecondary: '#9AA0A8',
-    accent: '#818CF8',
-    accentPressed: '#6366F1',
-    accentSoft: '#252A4A',
-    onAccent: '#0B0E1F',
+    accent: '#4FA8E0',
+    accentPressed: '#3593D2',
+    accentSoft: '#13324B',
+    onAccent: '#071A2B',
     accentAlt: '#FF9A52',
     accentAltSoft: '#4A2A12',
     onAccentAlt: '#2A1200',
-    success: '#2DD4A0',
-    successPressed: '#22B58A',
-    successSoft: '#0F3D30',
+    success: '#5CC9AC',
+    successPressed: '#4AB597',
+    successSoft: '#10352C',
     onSuccess: '#04140F',
     violet: '#A78BFA',
     violetSoft: '#2E2650',
